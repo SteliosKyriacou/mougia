@@ -33,8 +33,13 @@ Target: at least 5k unique couplets, at least 500 call/reply pairs, and at least
 
 The pasted GCN snippet is not a real design. It builds a random graph rather than the fly connectome, and it treats tokens as graph nodes. What we will build instead:
 
-1. **Connectome**: FlyWire FAFB v783 (about 139k neurons and 50M synapses, public, Codex download), or the newer male CNS connectome if it can be downloaded. Start with a subgraph that fits a 12 GB GPU, for example the central brain or the mushroom body plus the central complex, about 10–30k neurons.
+1. **Connectome**: both sexes. The male CNS v1.0 (Berg et al., *Cell* 2026; about 166k neurons; CC-BY; male-cns.janelia.org). The female FlyWire FAFB v783 (Dorkenwald et al., *Nature* 2024; about 139k neurons; Zenodo). Start with a subgraph that fits a 12 GB GPU, for example the central brain or the mushroom body plus the central complex, about 10–30k neurons.
 2. **Model**: a *connectome-constrained recurrent network*. The neurons are the hidden units. The recurrent weight matrix is sparse and fixed to the real synapses: the sign comes from the neurotransmitter, the initial magnitude from the synapse count, and only a per-edge or per-cell-type gain is learned. Token embeddings are injected into sensory neurons and read out from descending neurons. We unroll a few "ticks" per syllable.
 3. **Tokenization**: a syllable-level tokenizer for Cypriot Greek, with a vocabulary of about 2–4k syllables. This makes meter (15 syllables) and rhyme (final syllables) easy to learn.
 4. **Training**: (a) next-syllable language modeling on dialect text, then (b) fine-tuning on couplets, then (c) training on call→reply pairs. At generation time we use constrained decoding that forces 15 syllables per line and rhyme between the lines.
-5. **Baselines**: the same parameter budget with a random sparse graph of the same density, plus a tiny transformer. This shows whether the fly wiring actually matters.
+5. **Male vs. female**: train the same architecture on both sexes' wiring.
+   - **Female:** FlyWire FAFB v783 (brain only), or BANC (brain plus nerve cord).
+   - **Male:** the male CNS v1.0.
+   - **Fair comparison:** use the brain-only parts of both. Berg et al. matched cell types across the two sexes (7,205 types are the same in both), so both flies can get identical input (sensory) and output (descending) neuron types. Then only the wiring differs.
+   - **The fun part, a "Fly Tsiattista Battle":** the two models duel, each answering the other's last couplet. Each turn is scored on meter, rhyme and Cypriot score, plus human votes in the browser.
+6. **Baselines**: the same parameter budget with a random sparse graph of the same density, plus a tiny transformer. This shows whether the fly wiring actually matters.
