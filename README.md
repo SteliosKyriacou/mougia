@@ -90,6 +90,24 @@ The browser has no dependencies beyond the Python standard library.
 - **Sources:** every thread or document from every source.
 - **Search:** ignores accents, across verses and poet names. Press `/` to focus it.
 - **"Kept" vs "Everything stored":** switches between the cleaned dataset and every raw record. Filtered records are labelled with the reason they were dropped.
+- **Training:** live convergence for every run, refreshing every 30 seconds.
+  - Charts of training and validation loss, perplexity, meter/rhyme/Cypriot rates of the replies, learning rate, gradient norm, throughput, GPU memory, plus any other number the trainer logs.
+  - One line per run, with a hover readout and a table of the latest values.
+  - **Replies during training:** every 15 minutes of training, each model answers the same held-out couplets. The prompt and the reply are shown side by side with their scores.
+
+### Run logs (for the paper)
+
+Every training run writes to `runs/<run_id>/` through `mougia_train/runlog.py`. The files are append-only and flushed on every write:
+
+| File | Contents |
+|---|---|
+| `config.json` | full config, seed, git commit, host, library and GPU versions |
+| `status.json` | running / finished / failed, current step and training time |
+| `metrics.jsonl` | per-step: train loss, LR, grad norm, throughput, GPU memory, … |
+| `eval.jsonl` | per-evaluation: val loss/perplexity, meter, rhyme and Cypriot rates of generated replies |
+| `samples.jsonl` | prompt + reply couplets generated every 15 min of training time |
+
+Time spent generating samples is excluded from `elapsed_s`, so "training time" means the same thing for every run. Point the browser at another log directory with `MOUGIA_RUNS=/path/to/runs`.
 
 The page follows Apple's Human Interface Guidelines ([apple-design-skill](https://github.com/dickwu/apple-design-skill)):
 - system type for the interface, a Greek serif for the verse;

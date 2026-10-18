@@ -5,3 +5,5 @@ __pycache__/
 data/noncypriot/
 # Processed data contains copyrighted texts and real usernames; not redistributed from this public repo.
 data/processed/
+data/connectomes/
+runs/*/checkpoints/

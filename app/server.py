@@ -138,7 +138,84 @@ def page(items, q, size=50):
     return {"total": len(items), "page": p, "size": size, "items": items[p * size:(p + 1) * size]}
 
 
-ROUTES = {"/api/overview": lambda q: overview(), "/api/threads": list_threads, "/api/thread": get_thread,
+# ---------- Training runs (written by mougia_train/runlog.py) ----------
+RUNS = os.environ.get("MOUGIA_RUNS") or os.path.join(ROOT, "..", "runs")
+_cache = {}
+
+
+def read_jsonl(path):
+    """Read a JSONL file, cached by (mtime, size); tolerates a partially written last line."""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return []
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _cache.get(path)
+    if hit and hit[0] == key:
+        return hit[1]
+    rows = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    _cache[path] = (key, rows)
+    return rows
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def run_dirs():
+    if not os.path.isdir(RUNS):
+        return []
+    out = []
+    for name in os.listdir(RUNS):
+        cfg = read_json(os.path.join(RUNS, name, "config.json"))
+        if cfg:
+            out.append((cfg.get("started_at") or "", name, cfg))
+    return sorted(out)
+
+
+def list_runs(q):
+    runs = []
+    for slot, (_, name, cfg) in enumerate(run_dirs()):
+        d = os.path.join(RUNS, name)
+        metrics, evals = read_jsonl(os.path.join(d, "metrics.jsonl")), read_jsonl(os.path.join(d, "eval.jsonl"))
+        runs.append({"run": name, "slot": slot, "label": cfg.get("label") or name, "config": cfg,
+                     "status": read_json(os.path.join(d, "status.json")), "last_metrics": metrics[-1] if metrics else None,
+                     "last_eval": evals[-1] if evals else None, "n_metrics": len(metrics), "n_eval": len(evals),
+                     "n_samples": len(read_jsonl(os.path.join(d, "samples.jsonl")))})
+    return {"runs_dir": os.path.abspath(RUNS), "runs": runs}
+
+
+def downsample(rows, n=1500):
+    if len(rows) <= n:
+        return rows
+    stride = len(rows) / n
+    return [rows[int(i * stride)] for i in range(n)] + [rows[-1]]
+
+
+def run_series(q):
+    d = os.path.join(RUNS, os.path.basename(q.get("run", "")))
+    return {"metrics": downsample(read_jsonl(os.path.join(d, "metrics.jsonl"))), "eval": read_jsonl(os.path.join(d, "eval.jsonl"))}
+
+
+def run_samples(q):
+    names = [os.path.basename(q["run"])] if q.get("run") else [n for _, n, _ in run_dirs()]
+    rows = [{**r, "run": n} for n in names for r in read_jsonl(os.path.join(RUNS, n, "samples.jsonl"))]
+    rows.sort(key=lambda r: (r.get("time") or "", r.get("step") or 0), reverse=True)
+    return page(rows, q, size=int(q.get("size", 20) or 20))
+
+
+ROUTES = {"/api/runs": list_runs, "/api/run_series": run_series, "/api/run_samples": run_samples,
+          "/api/overview": lambda q: overview(), "/api/threads": list_threads, "/api/thread": get_thread,
           "/api/search": search, "/api/pairs": list_pairs}
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".svg": "image/svg+xml"}
