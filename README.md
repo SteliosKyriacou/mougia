@@ -119,6 +119,12 @@ The server has **no authentication**. Bound to `0.0.0.0`, it is visible to anyon
 
 ## The fly connectome
 
+There are two fly-brain ποιητάρηδες, one built from each sex's wiring:
+- **Kyriakou** is the female, built from FlyWire.
+- **Markos** is the male, built from the male CNS.
+
+They train on the same data and then duel each other (names are set in `mougia_train/poets.py`).
+
 | | Publication | Data / repository |
 |---|---|---|
 | **Male CNS connectome**, brain + nerve cord, ~166k neurons, ~125M synapses. *The map the "fly brain as an LLM" projects use.* | Berg et al., "Sexual dimorphism in the complete *Drosophila* male central nervous system connectome", *Cell* 189(18), 2026. [doi:10.1016/j.cell.2026.08.015](https://doi.org/10.1016/j.cell.2026.08.015) | [male-cns.janelia.org](https://male-cns.janelia.org/download/) (CC-BY; neuPrint dataset `male-cns:v1.0`, bucket `gs://flyem-male-cns/v1.0/`), with [neuprint-python](https://github.com/connectome-neuprint/neuprint-python) for access |
