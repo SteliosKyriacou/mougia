@@ -1,5 +1,8 @@
 # Mougia: a fruit-fly brain that answers in Cypriot τσιαττιστά
 
+> *Εκάτσαμεν να μάθουμεν της μούγιας να τσιαττίζει,*
+> *τζι εκείνη πάνω στο φαΐν γυρίζει τζιαι βουρνίζει!*
+
 Mougia trains a **connectome-constrained neural network** ([the wiring of the *Drosophila* brain](#the-fly-connectome)) to do what a Cypriot ποιητάρης does in a τσιαττιστά duel. You give it a rhyming 15-syllable couplet, and it answers with one.
 
 This repository holds:
