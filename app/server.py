@@ -169,7 +169,7 @@ def read_json(path):
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -178,6 +178,8 @@ def run_dirs():
         return []
     out = []
     for name in os.listdir(RUNS):
+        if not os.path.isdir(os.path.join(RUNS, name)):
+            continue  # stray files (e.g. logs) are not runs
         cfg = read_json(os.path.join(RUNS, name, "config.json"))
         if cfg:
             out.append((cfg.get("started_at") or "", name, cfg))
@@ -351,6 +353,19 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        try:
+            self._get()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:  # never drop the connection: tell the page what went wrong
+            import traceback
+            traceback.print_exc()
+            try:
+                self.send(500, "application/json; charset=utf-8", json.dumps({"error": f"{type(e).__name__}: {e}"}).encode())
+            except Exception:
+                pass
+
+    def _get(self):
         url = urllib.parse.urlparse(self.path)
         if url.path in BINARY_ROUTES:
             q = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query).items()}
