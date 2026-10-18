@@ -1,6 +1,6 @@
 # Mougia: a fruit-fly brain that answers in Cypriot τσιαττιστά
 
-Mougia trains a **connectome-constrained neural network** (the wiring of the *Drosophila* brain) to do what a Cypriot ποιητάρης does in a τσιαττιστά duel. You give it a rhyming 15-syllable couplet, and it answers with one.
+Mougia trains a **connectome-constrained neural network** ([the wiring of the *Drosophila* brain](#the-fly-connectome)) to do what a Cypriot ποιητάρης does in a τσιαττιστά duel. You give it a rhyming 15-syllable couplet, and it answers with one.
 
 This repository holds:
 
@@ -95,6 +95,15 @@ The page follows Apple's Human Interface Guidelines ([apple-design-skill](https:
 - a translucent toolbar, and a copper accent, because Cyprus is named for copper.
 
 The server has **no authentication**. Bound to `0.0.0.0`, it is visible to anyone who can reach the port.
+
+## The fly connectome
+
+| | Publication | Data / repository |
+|---|---|---|
+| **Male CNS connectome**, brain + nerve cord, ~166k neurons, ~125M synapses. *The map the "fly brain as an LLM" projects use.* | Berg et al., "Sexual dimorphism in the complete *Drosophila* male central nervous system connectome", *Cell* 189(18), 2026. [doi:10.1016/j.cell.2026.08.015](https://doi.org/10.1016/j.cell.2026.08.015) | [male-cns.janelia.org](https://male-cns.janelia.org/download/) (CC-BY; neuPrint dataset `male-cns:v1.0`, bucket `gs://flyem-male-cns/v1.0/`), with [neuprint-python](https://github.com/connectome-neuprint/neuprint-python) for access |
+| **FlyWire whole-brain connectome**, adult female brain, ~139k neurons, ~50M connections | Dorkenwald et al., "Neuronal wiring diagram of an adult brain", *Nature* 634, 124–138, 2024. [doi:10.1038/s41586-024-07558-y](https://doi.org/10.1038/s41586-024-07558-y) | [Zenodo v783 release](https://doi.org/10.5281/zenodo.10676866), [flyconnectome/flywire_annotations](https://github.com/flyconnectome/flywire_annotations), [codex.flywire.ai](https://codex.flywire.ai) |
+
+**The connectome trained as a language model.** PitchFly was built by Will Knight at WIRED: he vibe-coded headline generation through the open fly connectome. See ["I Trained a Fly's Brain to Generate WIRED Story Ideas"](https://www.wired.com/story/i-trained-a-fly-on-wired-story-ideas/) (WIRED, 2026) and the live site [pitchfly.fun](https://www.pitchfly.fun/). As far as we could find (2026-10-18), its source code is **not public**, so Mougia implements its own connectome-constrained model (see [PLAN.md](PLAN.md)).
 
 ## Licensing
 
