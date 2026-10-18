@@ -1,0 +1,7 @@
+data/raw/
+.venv/
+__pycache__/
+*.pyc
+data/noncypriot/
+# Processed data contains copyrighted texts and real usernames; not redistributed from this public repo.
+data/processed/

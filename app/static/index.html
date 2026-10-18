@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mougia Tsiattista</title>
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="shell">
+  <aside class="sidebar" id="sidebar" aria-label="Library">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <div class="brand-name">Mougia</div>
+        <div class="brand-sub">Cypriot tsiattista corpus</div>
+      </div>
+    </div>
+    <form class="search" role="search" id="search-form">
+      <label for="q" class="sr">Search verses</label>
+      <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>
+      <input id="q" type="search" placeholder="Search verses, poets" autocomplete="off" spellcheck="false">
+    </form>
+    <nav id="nav"></nav>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <div class="content">
+    <header class="toolbar">
+      <button class="icon-btn menu-btn" id="menu-btn" aria-label="Show library" aria-controls="sidebar" aria-expanded="false">
+        <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M3 6h14M3 10h14M3 14h14"/></svg>
+      </button>
+      <div class="toolbar-title">
+        <button class="back" id="back" hidden>‹ Back</button>
+        <h1 id="title">Battles</h1>
+      </div>
+      <div class="segmented" role="group" aria-label="Which records to show">
+        <button id="show-kept" aria-pressed="true">Kept</button>
+        <button id="show-all" aria-pressed="false">Everything stored</button>
+      </div>
+    </header>
+    <main id="main" tabindex="-1"></main>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
