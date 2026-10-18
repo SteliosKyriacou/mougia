@@ -98,7 +98,8 @@ class RunLogger:
         return self.elapsed() - self._last_sample >= self.sample_every_s
 
     def sampling(self):
-        """Context manager: time spent generating samples is excluded from elapsed training time."""
+        """Context manager: time spent evaluating / generating samples is excluded from elapsed training time.
+        (It does not touch the sample timer — only sample() does, so evaluations can't postpone samples.)"""
         logger = self
 
         class _Pause:
@@ -107,12 +108,12 @@ class RunLogger:
 
             def __exit__(self, *exc):
                 logger._paused += time.time() - self.t
-                logger._last_sample = logger.elapsed()
 
         return _Pause()
 
     def sample(self, step, phase, prompt, reply, **scores):
-        """One generated reply. prompt/reply are couplets as 'line1\\nline2'."""
+        """One generated reply. prompt/reply are couplets as 'line1\\nline2'. Restarts the 15-minute sample timer."""
+        self._last_sample = self.elapsed()
         self._write("samples.jsonl", {**self._base(step, phase), "prompt": prompt, "reply": reply, **_clean(scores)})
 
     def status(self, state, note=None):

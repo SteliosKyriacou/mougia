@@ -7,3 +7,4 @@ data/noncypriot/
 data/processed/
 data/connectomes/
 runs/*/checkpoints/
+*.log

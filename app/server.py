@@ -8,6 +8,7 @@ import http.server
 import json
 import os
 import re
+import time
 import unicodedata
 import urllib.parse
 
@@ -214,7 +215,134 @@ def run_samples(q):
     return page(rows, q, size=int(q.get("size", 20) or 20))
 
 
-ROUTES = {"/api/runs": list_runs, "/api/run_series": run_series, "/api/run_samples": run_samples,
+# ---------- Brain viewer: neurons + weighted edges from raw connectomes or training checkpoints ----------
+GRAPHS = os.path.join(ROOT, "..", "data", "connectomes", "processed")
+POET = {"female": "Kyriakou", "male": "Markos"}
+SUPERCLASS_GROUPS = [  # (label, female names, male names) — display grouping shared by both sexes
+    ("Optic lobe", {"optic"}, {"ol_intrinsic"}),
+    ("Visual projection", {"visual_projection", "visual_centrifugal"}, {"visual_projection", "visual_centrifugal", "ol_sensory"}),
+    ("Central brain", {"central"}, {"cb_intrinsic"}),
+    ("Sensory", {"sensory", "sensory_ascending"}, {"cb_sensory", "sensory_ascending", "sensory_descending"}),
+    ("Ascending", {"ascending"}, {"ascending_neuron", "efferent_ascending"}),
+    ("Descending", {"descending"}, {"descending_neuron", "efferent_descending"}),
+    ("Motor / endocrine", {"motor", "endocrine"}, {"cb_motor", "cb_endocrine", "cb_efferent"}),
+]
+_brain_cache = collections.OrderedDict()
+
+
+def _cached(key, fn, size=4):
+    if key in _brain_cache:
+        _brain_cache.move_to_end(key)
+        return _brain_cache[key]
+    val = fn()
+    _brain_cache[key] = val
+    while len(_brain_cache) > size:
+        _brain_cache.popitem(last=False)
+    return val
+
+
+def _torch():
+    import torch  # only the brain viewer needs torch
+    return torch
+
+
+def load_graph_file(name):
+    torch = _torch()
+    return _cached(("graph", name), lambda: torch.load(os.path.join(GRAPHS, os.path.basename(name) + ".pt")))
+
+
+def brain_models(q):
+    models = []
+    for name in ("female_full", "male_full", "female_central", "male_central"):
+        if os.path.exists(os.path.join(GRAPHS, name + ".pt")):
+            sex, region = name.split("_")
+            models.append({"id": f"raw:{name}", "group": "Connectomes (before training)", "graph": name,
+                           "label": f"{POET[sex]} — {'full brain' if region == 'full' else 'central brain'}"})
+    for _, run, cfg in reversed(run_dirs()):
+        args = cfg.get("args") or {}
+        sex, region = args.get("sex"), args.get("region", "full")
+        ck = os.path.join(RUNS, run, "checkpoints")
+        if not sex or not os.path.isdir(ck):
+            continue
+        files = sorted(os.listdir(ck), key=lambda f: os.path.getmtime(os.path.join(ck, f)))
+        for f in files:
+            if f.endswith(".pt"):
+                models.append({"id": f"ckpt:{run}/{f}", "group": cfg.get("label") or run, "graph": f"{sex}_{region}",
+                               "label": f.removesuffix(".pt").replace("end-", "end of "),
+                               "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(os.path.join(ck, f))))})
+    return {"models": models}
+
+
+def _edges_for(model_id):
+    """(pre, post, w, scale, info) for a model id; w is the signed effective weight, scale = exp(learned log-scale)."""
+    torch = _torch()
+
+    def compute():
+        if model_id.startswith("raw:"):
+            g = load_graph_file(model_id[4:])
+            pre, post, syn, sign = g["pre"], g["post"], g["syn"], g["sign"]
+            tot = torch.zeros(g["n"]).index_add_(0, post, syn).clamp_min(1.0)
+            w = sign[pre] * syn / tot[post]
+            return pre, post, w, torch.ones_like(w), {"step": 0}
+        run, f = model_id[5:].split("/", 1)
+        path = os.path.join(RUNS, os.path.basename(run), "checkpoints", os.path.basename(f))
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        sd = ck["model"]
+        theta = sd.get("edge_logscale")
+        scale = torch.exp(theta.clamp(-6, 6)) if theta is not None else torch.ones_like(sd["w0"])
+        rho = float(sd.get("rho", torch.tensor(1.0)))
+        return sd["col"], sd["row"], sd["w0"] * scale * rho, scale, {"step": ck.get("step"), "rho": rho}
+    return _cached(("edges", model_id), compute)
+
+
+def brain_neurons(q):
+    """Binary: Float32 xyz (normalised, y up) for every neuron, then Uint8 display group, then Uint8 role (1=input, 2=output)."""
+    import numpy as np
+    g = load_graph_file(q.get("graph", "female_full"))
+    pos = g["pos"].numpy().astype(np.float64)
+    pos = pos - np.median(pos, 0)
+    pos /= np.percentile(np.abs(pos), 99) or 1.0
+    pos[:, 1] *= -1  # image y grows ventrally
+    pos[:, 2] *= -1
+    female = q.get("graph", "").startswith("female")
+    grp = np.zeros(g["n"], np.uint8)
+    for k, (_, fs, ms) in enumerate(SUPERCLASS_GROUPS):
+        names = fs if female else ms
+        grp[[i for i, sc in enumerate(g["superclass"]) if sc in names]] = k + 1
+    role = np.zeros(g["n"], np.uint8)
+    role[[i for v in g["input_groups"].values() for i in v]] = 1
+    role[[i for v in g["output_groups"].values() for i in v]] = 2
+    meta = {"n": g["n"], "groups": [x[0] for x in SUPERCLASS_GROUPS], "estimated": int(g["pos_estimated"].sum()),
+            "edges": int(len(g["pre"]))}
+    return pos.astype(np.float32).tobytes() + grp.tobytes() + role.tobytes(), meta
+
+
+def brain_edges(q):
+    """Binary: Uint32 pre, Uint32 post, Float32 weight, Float32 learned scale for the selected subset of edges."""
+    import numpy as np
+    torch = _torch()
+    pre, post, w, scale, info = _edges_for(q.get("model", "raw:female_full"))
+    k = max(1000, min(int(q.get("k", 30000) or 30000), 200000))
+    mode = q.get("select", "strongest")
+    if mode == "random":
+        idx = torch.randperm(len(w), generator=torch.Generator().manual_seed(0))[:k]
+    elif mode == "changed":
+        idx = torch.topk(torch.log(scale).abs(), min(k, len(w))).indices
+    else:
+        idx = torch.topk(w.abs(), min(k, len(w))).indices
+    a = w.abs()
+    meta = {"total_edges": int(len(w)), "shown": int(len(idx)), **info,
+            "w_abs_p50": float(a.median()), "w_abs_p99": float(torch.quantile(a[torch.randperm(len(a))[:200000]], 0.99)),
+            "w_abs_max": float(a.max()), "inhibitory_frac": float((w < 0).float().mean()),
+            "scale_min": float(scale.min()), "scale_max": float(scale.max()), "learned": bool((scale != 1).any())}
+    body = (pre[idx].numpy().astype(np.uint32).tobytes() + post[idx].numpy().astype(np.uint32).tobytes()
+            + w[idx].numpy().astype(np.float32).tobytes() + scale[idx].numpy().astype(np.float32).tobytes())
+    return body, meta
+
+
+BINARY_ROUTES = {"/api/brain/neurons": brain_neurons, "/api/brain/edges": brain_edges}
+
+ROUTES = {"/api/brain/models": brain_models, "/api/runs": list_runs, "/api/run_series": run_series, "/api/run_samples": run_samples,
           "/api/overview": lambda q: overview(), "/api/threads": list_threads, "/api/thread": get_thread,
           "/api/search": search, "/api/pairs": list_pairs}
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -224,6 +352,21 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
+        if url.path in BINARY_ROUTES:
+            q = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query).items()}
+            try:
+                body, meta = BINARY_ROUTES[url.path](q)
+            except (FileNotFoundError, KeyError, ValueError) as e:
+                return self.send(404, "application/json", json.dumps({"error": str(e)}).encode())
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Meta", json.dumps(meta))
+            self.send_header("Access-Control-Expose-Headers", "X-Meta")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if url.path in ROUTES:
             q = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query).items()}
             body = json.dumps(ROUTES[url.path](q), ensure_ascii=False).encode()

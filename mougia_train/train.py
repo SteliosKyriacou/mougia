@@ -251,6 +251,9 @@ def main():
             save(f"end-{phase}")
         log.close("finished")
     except TimeoutError:
+        with log.sampling():
+            log.eval(step, phase, **evaluate(phase))
+            sample(phase)
         save("latest")
         log.close("stopped", note=f"max-hours {a.max_hours} reached")
     except KeyboardInterrupt:

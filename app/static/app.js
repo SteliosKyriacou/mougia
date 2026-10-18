@@ -52,7 +52,8 @@ function renderNav(route) {
     link("#/pairs", "Call → reply pairs", o.pairs),
     link("#/couplets", "All couplets", o.kept),
     h("h2", {}, "Model"),
-    link("#/training", "Training"));
+    link("#/training", "Training"),
+    link("#/brain", "Brain"));
   const groups = {};
   for (const s of o.sources) if (s.kept > 0 || state.showAll) (groups[s.group] ||= []).push(s);
   for (const g of ["Books", "Web", "Corpora", "YouTube"]) {
@@ -217,6 +218,7 @@ async function route() {
     if (view === "source" && a) await viewSource(a);
     else if (view === "thread" && a && b != null) await viewThread(a, decodeURIComponent(b), c);
     else if (view === "pairs") await viewPairs();
+    else if (view === "brain") await window.MougiaBrain.viewBrain(main, { api, setTitle });
     else if (view === "training") await window.MougiaTraining.viewTraining(main, { api, setTitle, verseLines, fmt });
     else if (view === "couplets") await viewSearch("");
     else if (view === "search") await viewSearch(decodeURIComponent(a || ""));

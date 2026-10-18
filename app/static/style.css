@@ -232,3 +232,30 @@ h2.section { font-size: 20px; margin: 32px 0 12px; }
 .sample-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--secondary); margin: 0 4px 8px; flex-wrap: wrap; }
 .sample-head strong { color: var(--label); }
 @media (max-width: 860px) { .chart-grid { grid-template-columns: 1fr; } }
+
+/* ---------- Brain tab ---------- */
+:root {
+  --div-neg: #2a78d6; --div-mid: #e2e1dc; --div-pos: #e34948;   /* diverging blue ↔ gray ↔ red */
+  --neuron: #8e8e93; --role-in: #1baf7a; --role-out: #eda100;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767; --neuron: #636366; --role-in: #199e70; --role-out: #c98500; }
+}
+.select { min-height: 36px; border-radius: 10px; border: 1px solid var(--separator); background: var(--surface); padding: 0 10px; font-size: 15px; max-width: 100%; }
+.brain-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.brain-stage { position: relative; height: min(72vh, 760px); min-height: 420px; transition: opacity .2s; }
+.brain-stage.refreshing { opacity: .6; }
+.brain-stage canvas { display: block; width: 100% !important; height: 100% !important; cursor: grab; touch-action: none; }
+.brain-stage canvas:active { cursor: grabbing; }
+.brain-stats { position: absolute; top: 12px; left: 14px; font-size: 13px; line-height: 1.6; pointer-events: none; max-width: min(420px, 70%);
+  background: color-mix(in srgb, var(--surface) 82%, transparent); border-radius: 10px; padding: 8px 10px; }
+.brain-title { font-weight: 600; font-size: 15px; margin-bottom: 2px; }
+.brain-legend { position: absolute; left: 14px; bottom: 12px; font-size: 12px; color: var(--secondary); width: min(320px, 70%);
+  background: color-mix(in srgb, var(--surface) 82%, transparent); border-radius: 10px; padding: 8px 10px; pointer-events: none; }
+.legend-bar { height: 8px; border-radius: 4px; margin-bottom: 4px; }
+.legend-labels { display: flex; justify-content: space-between; }
+.legend-keys { display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; }
+.legend-keys .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+.brain-tools { position: absolute; right: 12px; top: 12px; display: flex; gap: 8px; }
+.brain-groups { margin: 12px 0; }
+@media (max-width: 860px) { .brain-stats { max-width: calc(100% - 28px); } .brain-tools { top: auto; bottom: 12px; } .brain-legend { bottom: 60px; } }

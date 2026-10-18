@@ -35,6 +35,8 @@ def male():
     d = os.path.join(ROOT, "male_cns_v1.0")
     ann = pd.read_feather(os.path.join(d, "body-annotations-male-cns-v1.0-minconf-0.5.feather"))
     ann = ann[ann.superclass.isin(MALE_BRAIN)].copy()
+    loc = ann.somaLocation.where(ann.somaLocation.notna(), ann.tosomaLocation)
+    pos = np.array([np.asarray(v, float) * 8.0 if v is not None and len(v) == 3 else [np.nan] * 3 for v in loc])
     nt = pd.read_feather(os.path.join(d, "body-neurotransmitters-male-cns-v1.0.feather"))
     nt["nt"] = nt.consensus_nt.where(nt.consensus_nt != "unclear", nt.celltype_predicted_nt)
     ann = ann.merge(nt[["body", "nt"]], left_on="bodyId", right_on="body", how="left")
@@ -48,7 +50,7 @@ def male():
                 edges=w.rename(columns={"body_pre": "pre", "body_post": "post", "weight": "syn"}),
                 optic=ann.superclass.isin(OPTIC_MALE).to_numpy(),
                 orn=(ann.cls == "olfactory").to_numpy() & ann.type.astype(str).str.startswith("ORN").to_numpy(),
-                dn=(ann.superclass == "descending_neuron").to_numpy())
+                dn=(ann.superclass == "descending_neuron").to_numpy(), pos=pos)
 
 
 def female():
@@ -63,7 +65,29 @@ def female():
                 nt=ann.top_nt.fillna("").astype(str).str.lower().to_numpy(), edges=edges,
                 optic=ann.super_class.isin(OPTIC_FEMALE).to_numpy(),
                 orn=(ann.cell_class == "olfactory").to_numpy() & t.str.startswith("ORN").to_numpy(),
-                dn=(ann.super_class == "descending").to_numpy())
+                dn=(ann.super_class == "descending").to_numpy(),
+                pos=ann[["pos_x", "pos_y", "pos_z"]].to_numpy(float) * np.array([4.0, 4.0, 40.0]))
+
+
+def fill_positions(pos, pre, post, syn, rounds=5):
+    """Neurons without a recorded position (e.g. sensory neurons with no soma in the brain) are placed at the
+    synapse-weighted mean position of their partners, repeated a few times; any left over go to the centroid."""
+    pos = pos.copy()
+    missing = np.isnan(pos).any(1)
+    estimated = missing.copy()
+    a = np.concatenate([pre, post]); b = np.concatenate([post, pre]); w = np.concatenate([syn, syn]).astype(float)
+    for _ in range(rounds):
+        if not missing.any():
+            break
+        known = ~missing[b] & missing[a]
+        acc = np.zeros((len(pos), 3)); tot = np.zeros(len(pos))
+        np.add.at(acc, a[known], pos[b[known]] * w[known, None])
+        np.add.at(tot, a[known], w[known])
+        fill = missing & (tot > 0)
+        pos[fill] = acc[fill] / tot[fill, None]
+        missing &= ~fill
+    pos[missing] = np.nanmean(pos[~missing], 0) if (~missing).any() else 0
+    return pos, estimated
 
 
 def build(g, keep, in_types, out_types):
@@ -75,6 +99,7 @@ def build(g, keep, in_types, out_types):
     nt = g["nt"][keep]
     sign = np.where(np.isin(nt, list(INHIBITORY)), -1.0, 1.0).astype(np.float32)
     ftype = g["fwtype"][keep]
+    pos, estimated = fill_positions(g["pos"][keep], pre, post, e.syn.to_numpy())
     groups = lambda mask, types: {t: np.flatnonzero(mask & (ftype == t)).tolist() for t in types}
     return {
         "n": int(len(ids)), "pre": torch.from_numpy(pre.astype(np.int64)), "post": torch.from_numpy(post.astype(np.int64)),
@@ -82,6 +107,7 @@ def build(g, keep, in_types, out_types):
         "input_groups": groups(g["orn"][keep], in_types), "output_groups": groups(g["dn"][keep], out_types),
         "neuron_type": ftype.tolist(), "superclass": g["superclass"][keep].tolist(), "ids": ids.tolist(),
         "nt": nt.tolist(), "min_syn": MIN_SYN,
+        "pos": torch.from_numpy(pos.astype(np.float32)), "pos_estimated": torch.from_numpy(estimated),
     }
 
 
@@ -101,6 +127,7 @@ def main():
                 "neurons": d["n"], "edges": int(len(d["pre"])), "synapses": int(d["syn"].sum()),
                 "inhibitory_frac": round(float((d["sign"] < 0).float().mean()), 3),
                 "input_neurons": sum(map(len, d["input_groups"].values())), "output_neurons": sum(map(len, d["output_groups"].values())),
+                "positions_estimated": int(d["pos_estimated"].sum()),
                 "superclasses": dict(collections.Counter(d["superclass"]).most_common(8)),
             }
             print(sex, region, json.dumps(summary[f"{sex}_{region}"]))
