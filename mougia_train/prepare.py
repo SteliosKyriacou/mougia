@@ -11,6 +11,7 @@ Writes data/processed/train/:
 Splits are by thread/source document so a duel never leaks between train and val. Any pretraining line that
 matches a held-out couplet line is dropped from the LM stream.
 """
+import collections
 import glob
 import hashlib
 import json
@@ -25,7 +26,7 @@ ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, ROOT)
 from greek_meter import dedupe_key  # noqa: E402
-from mougia_train.tokenizer import BOS, EOS, NL, SEP, Tokenizer  # noqa: E402
+from mougia_train.tokenizer import CONT, DUEL, SEP, Tokenizer  # noqa: E402
 
 RAW = os.path.join(ROOT, "data", "raw")
 PROC = os.path.join(ROOT, "data", "processed")
@@ -36,7 +37,7 @@ LM_SOURCES = [
     "corpus_grdd_zenodo/extracted/*/SMS_CG/cg_*.txt",
     "book_sakellarios1891/songs_text.txt",
 ]
-VAL_FRAC_COUPLETS, VAL_FRAC_PAIRS, VAL_FRAC_LM = 0.05, 0.15, 0.01
+VAL_FRAC_COUPLETS, VAL_FRAC_PAIRS, VAL_FRAC_LM = 0.05, 0.15, 0.01  # duel pairs use VAL_FRAC_PAIRS, continuations VAL_FRAC_COUPLETS
 N_SAMPLE_PROMPTS = 4
 
 
@@ -47,20 +48,39 @@ def bucket(key, frac):
 def main():
     os.makedirs(OUT, exist_ok=True)
     couplets = [json.loads(l) for l in open(os.path.join(PROC, "couplets.jsonl"), encoding="utf-8")]
-    pairs = [json.loads(l) for l in open(os.path.join(PROC, "pairs.jsonl"), encoding="utf-8")]
-    records = {}
+    duel_pairs = [json.loads(l) for l in open(os.path.join(PROC, "pairs.jsonl"), encoding="utf-8")]
+    records, threads = {}, collections.defaultdict(list)
     for l in open(os.path.join(PROC, "records.jsonl"), encoding="utf-8"):
         r = json.loads(l)
         if r.get("cid") and r["status"] == "kept":
             records[r["cid"]] = r["src"] + "|" + r["thread"]
+            threads[r["src"] + "|" + r["thread"]].append(r)
     by_id = {c["id"]: c for c in couplets}
+    strict = lambda cid: by_id[cid]["meter_ok"] and by_id[cid]["rhyme_ok"]
 
-    # Pairs split by thread; couplets that appear in a val pair are val too.
-    val_threads = {records.get(p["reply"], p["reply"]) for p in pairs if bucket(records.get(p["reply"], p["reply"]), VAL_FRAC_PAIRS)}
-    pair_val = [p for p in pairs if records.get(p["reply"], p["reply"]) in val_threads]
-    pair_train = [p for p in pairs if records.get(p["reply"], p["reply"]) not in val_threads]
+    # Reply training pairs, two styles:
+    #   duel — a real call→reply exchange between two poets (battle style); strict replies weigh more
+    #   cont — the next couplet of the same song / poem / thread, kept only when it is metrical and rhymes
+    #          (teaches answering a couplet in context with meter + rhyme)
+    pairs, seen_pairs = [], set()
+    for p in duel_pairs:
+        pairs.append({"call": p["call"], "reply": p["reply"], "style": "duel", "w": 3.0 if strict(p["reply"]) else 1.0})
+        seen_pairs.add((p["call"], p["reply"]))
+    for key, rs in threads.items():
+        rs.sort(key=lambda r: (r["order"] if r["order"] is not None else 1e9, r.get("segment") or 0, r["n"]))
+        for a, b in zip(rs, rs[1:]):
+            if a["cid"] != b["cid"] and (a["cid"], b["cid"]) not in seen_pairs and strict(b["cid"]):
+                pairs.append({"call": a["cid"], "reply": b["cid"], "style": "cont", "w": 1.0})
+                seen_pairs.add((a["cid"], b["cid"]))
+
+    # Split by thread so an exchange never leaks; couplets that appear in a val pair are val too.
+    thread_of = lambda cid: records.get(cid, cid)
+    frac = {"duel": VAL_FRAC_PAIRS, "cont": VAL_FRAC_COUPLETS}
+    val_threads = {thread_of(p["reply"]) for p in pairs if bucket(thread_of(p["reply"]), frac[p["style"]])}
+    pair_val = [p for p in pairs if thread_of(p["reply"]) in val_threads]
+    pair_train = [p for p in pairs if thread_of(p["reply"]) not in val_threads]
     val_cids = {p[k] for p in pair_val for k in ("call", "reply")}
-    coup_val = [c for c in couplets if c["id"] in val_cids or bucket(records.get(c["id"], c["id"]), VAL_FRAC_COUPLETS)]
+    coup_val = [c for c in couplets if c["id"] in val_cids or bucket(thread_of(c["id"]), VAL_FRAC_COUPLETS)]
     val_set = {c["id"] for c in coup_val}
     coup_train = [c for c in couplets if c["id"] not in val_set]
     held_lines = {dedupe_key(line) for c in coup_val for line in c["lines"]}
@@ -96,7 +116,9 @@ def main():
 
     lm_val, lm_train = stream(lm_lines[:n_val]), stream(lm_lines[n_val:])
     enc_c = lambda c: tok.encode("\n".join(c["lines"]), bos=True, eos=True)
-    enc_p = lambda p: (tok.encode(by_id[p["call"]]["text"], bos=True) + [SEP], tok.encode(by_id[p["reply"]]["text"], eos=True))
+    style_id = {"duel": DUEL, "cont": CONT}
+    enc_p = lambda p: {"call": tok.encode(by_id[p["call"]]["text"], bos=True) + [SEP, style_id[p["style"]]],
+                       "reply": tok.encode(by_id[p["reply"]]["text"], eos=True), "style": p["style"], "w": p["w"]}
     torch.save(lm_train, os.path.join(OUT, "lm_train.pt"))
     torch.save(lm_val, os.path.join(OUT, "lm_val.pt"))
     torch.save([enc_c(c) for c in coup_train], os.path.join(OUT, "couplets_train.pt"))
@@ -107,24 +129,27 @@ def main():
     # Fixed prompts for the 15-minute samples: held-out calls with strict meter + rhyme, from different threads.
     prompts, used = [], set()
     prio = {"web_shapxar": 0, "corpus_tsiattista_muse": 1, "web_tsiatista_wordpress": 2}
-    for p in sorted(pair_val, key=lambda p: (prio.get(by_id[p["call"]]["source"], 9), -by_id[p["call"]]["cy_score"], p["call"])):
+    for p in sorted([p for p in pair_val if p["style"] == "duel"], key=lambda p: (prio.get(by_id[p["call"]]["source"], 9), -by_id[p["call"]]["cy_score"], p["call"])):
         c = by_id[p["call"]]
         th = records.get(p["call"])
-        if c["meter_ok"] and c["rhyme_ok"] and th not in used:
+        if strict(p["call"]) and strict(p["reply"]) and min(c["cy_score"], by_id[p["reply"]]["cy_score"]) >= 3 and th not in used:
             prompts.append({"id": c["id"], "text": c["text"], "true_reply": by_id[p["reply"]]["text"]})
             used.add(th)
         if len(prompts) == N_SAMPLE_PROMPTS:
             break
-    for c in coup_val:  # top up from held-out couplets if there are too few duel prompts
+    for c in sorted(coup_val, key=lambda c: -c["cy_score"]):  # top up from held-out couplets if there are too few duel prompts
         if len(prompts) >= N_SAMPLE_PROMPTS:
             break
-        if c["meter_ok"] and c["rhyme_ok"] and c["id"] not in {p["id"] for p in prompts}:
+        if strict(c["id"]) and c["cy_score"] >= 4 and c["id"] not in {p["id"] for p in prompts}:
             prompts.append({"id": c["id"], "text": c["text"], "true_reply": None})
     json.dump(prompts, open(os.path.join(OUT, "sample_prompts.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
     stats = {"vocab": len(tok), "lm_train_tokens": int(len(lm_train)), "lm_val_tokens": int(len(lm_val)), "lm_lines": len(lm_lines),
              "lm_lines_dropped_as_heldout": dropped, "couplets_train": len(coup_train), "couplets_val": len(coup_val),
              "pairs_train": len(pair_train), "pairs_val": len(pair_val), "sample_prompts": len(prompts),
+             "pairs_train_by_style": dict(collections.Counter(p["style"] for p in pair_train)),
+             "pairs_val_by_style": dict(collections.Counter(p["style"] for p in pair_val)),
+             "duel_train_strict": sum(1 for p in pair_train if p["style"] == "duel" and p["w"] > 1),
              "unk_rate_lm_val": round(float((lm_val == 1).float().mean()), 5)}
     json.dump(stats, open(os.path.join(OUT, "stats.json"), "w"), indent=2)
     print(json.dumps(stats, indent=2))

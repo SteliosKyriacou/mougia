@@ -17,8 +17,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 from greek_meter import nuclei  # noqa: E402
 
-SPECIALS = ["<pad>", "<unk>", "<bos>", "<eos>", "<nl>", "<sep>"]
-PAD, UNK, BOS, EOS, NL, SEP = range(len(SPECIALS))
+SPECIALS = ["<pad>", "<unk>", "<bos>", "<eos>", "<nl>", "<sep>", "<duel>", "<cont>"]
+PAD, UNK, BOS, EOS, NL, SEP, DUEL, CONT = range(len(SPECIALS))  # <duel>/<cont>: reply style after <sep>
 WB = "▁"
 APOS = "’"
 KEEP_CHAR = re.compile(r"[\u0370-\u03ffa-z0-9.,;:!?·«»\"()\-–—’…/]")
@@ -137,7 +137,7 @@ class Tokenizer:
         out = []
         for i in ids:
             s = self.itos[i] if 0 <= i < len(self.itos) else "<unk>"
-            if s in ("<pad>", "<bos>", "<eos>", "<sep>"):
+            if s in ("<pad>", "<bos>", "<eos>", "<sep>", "<duel>", "<cont>"):
                 continue
             if s == "<nl>":
                 out.append("\n")
@@ -150,6 +150,14 @@ class Tokenizer:
         text = "".join(out)
         text = re.sub(r" *\n *", "\n", text).strip()
         return _final_sigma(text)
+
+    def is_syllable(self, i):
+        """True for tokens that carry a vowel (count towards the 15-syllable line)."""
+        s = self.itos[i].lstrip(WB) if 0 <= i < len(self.itos) else ""
+        return any(ch in "αεηιουωάέήίόύώϊϋΐΰ" for ch in s)
+
+    def is_word_start(self, i):
+        return 0 <= i < len(self.itos) and self.itos[i].startswith(WB)
 
     def save(self, path):
         with open(path, "w", encoding="utf-8") as f:

@@ -16,6 +16,7 @@ import json
 import math
 import os
 import random
+import signal
 import sys
 import time
 
@@ -26,8 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
-from dialect import cypriot_score  # noqa: E402
-from greek_meter import is_15_syllable, rhymes, syllables  # noqa: E402
+from mougia_train.generate import BAN, prompt_ids, reply as gen_reply, score_reply, verse_masks  # noqa: E402
 from mougia_train.model import FlyBrainLM, load_graph  # noqa: E402
 from mougia_train.poets import POETS, run_label  # noqa: E402
 from mougia_train.runlog import RunLogger  # noqa: E402
@@ -59,7 +59,8 @@ def parse():
     ap.add_argument("--clip", type=float, default=1.0)
     ap.add_argument("--pretrain-tokens", type=float, default=11.5e6, help="≈2 passes over the dialect text")
     ap.add_argument("--couplet-tokens", type=float, default=4.2e6, help="≈20 passes over the couplets")
-    ap.add_argument("--pair-tokens", type=float, default=0.33e6, help="≈30 passes over the reply pairs")
+    ap.add_argument("--pair-tokens", type=float, default=2.5e6, help="≈20 passes over the reply tokens of all pairs")
+    ap.add_argument("--duel-share", type=float, default=0.4, help="fraction of reply batches drawn from real duel pairs")
     ap.add_argument("--log-every", type=int, default=10)
     ap.add_argument("--eval-every-min", type=float, default=10)
     ap.add_argument("--sample-every-min", type=float, default=15)
@@ -104,10 +105,18 @@ class Batches:
         seqs = random.sample(src, min(n or self.a.batch, len(src)))
         return self.pad(seqs, [1] * len(seqs))
 
-    def pairs(self, split="train", n=None):
-        src = self.p_train if split == "train" else self.p_val
-        pick = [random.choice(src) for _ in range(n or self.a.batch)] if split == "train" else src[: n or len(src)]
-        return self.pad([c + r for c, r in pick], [len(c) for c, _ in pick])
+    def pairs(self, split="train", n=None, style=None):
+        """Reply batches. Training mixes real duels (duel-share of the batch, strict replies weighted ×3) with
+        continuation pairs; validation can be restricted to one style."""
+        if split == "train":
+            duel = [p for p in self.p_train if p["style"] == "duel"]
+            cont = [p for p in self.p_train if p["style"] == "cont"]
+            B = n or self.a.batch
+            k = sum(random.random() < self.a.duel_share for _ in range(B))
+            pick = random.choices(duel, weights=[p["w"] for p in duel], k=k) + random.choices(cont, k=B - k)
+        else:
+            pick = [p for p in self.p_val if style in (None, p["style"])][: n or None]
+        return self.pad([p["call"] + p["reply"] for p in pick], [len(p["call"]) for p in pick])
 
 
 def masked_ce(logits, tgt, mask):
@@ -116,15 +125,16 @@ def masked_ce(logits, tgt, mask):
     return (loss * m).sum() / m.sum().clamp_min(1)
 
 
-def score_reply(text):
-    lines = [l for l in text.split("\n") if l.strip()]
-    two = len(lines) == 2
-    return {"syllables": [syllables(l)[1] for l in lines[:2]], "meter_ok": two and all(is_15_syllable(l) for l in lines),
-            "rhyme_ok": two and rhymes(*lines), "cy_score": round(cypriot_score(text)[0], 1)}
-
 
 # ---------------------------------------------------------------------------------------------------------------
+def _stop(*_):
+    raise KeyboardInterrupt
+
+
 def main():
+    # Background jobs ignore SIGINT; make both SIGINT and SIGTERM stop cleanly (checkpoint + status "stopped").
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
     a = parse()
     random.seed(a.seed)
     torch.manual_seed(a.seed)
@@ -134,6 +144,7 @@ def main():
     model = FlyBrainLM(graph, len(tok), d_model=a.d_model, ticks=a.ticks, alpha=a.alpha,
                        learn_edges=not a.no_learn_edges, readout_hidden=a.readout_hidden).to(dev)
     data = Batches(a, tok)
+    masks = verse_masks(tok)
     prompts = json.load(open(os.path.join(DATA, "sample_prompts.json"), encoding="utf-8"))
     data_stats = json.load(open(os.path.join(DATA, "stats.json")))
 
@@ -162,35 +173,34 @@ def main():
         model.eval()
         out = {}
         with torch.no_grad():
-            for name, fn, n in (("val_loss_lm", data.lm, 32), ("val_loss_couplets", data.couplets, 64), ("val_loss_pairs", data.pairs, None)):
-                inp, tgt, mask = fn("val", n)
+            for name, fn, kw in (("val_loss_lm", data.lm, {"n": 32}), ("val_loss_couplets", data.couplets, {"n": 64}),
+                                 ("val_loss_duel", data.pairs, {"style": "duel"}), ("val_loss_cont", data.pairs, {"style": "cont", "n": 64})):
+                inp, tgt, mask = fn("val", **kw)
                 logits, _ = model(inp.to(dev), grad_ckpt=False)
                 out[name] = masked_ce(logits, tgt.to(dev), mask.to(dev)).item()
-        key = {"pretrain": "val_loss_lm", "couplets": "val_loss_couplets", "pairs": "val_loss_pairs"}[phase]
+        key = {"pretrain": "val_loss_lm", "couplets": "val_loss_couplets", "pairs": "val_loss_duel"}[phase]
         out["val_loss"] = out[key]
         out["val_ppl"] = math.exp(min(out["val_loss"], 20))
-        # Generation quality on held-out calls.
-        scores = []
-        for c, _ in data.p_val[: a.eval_replies]:
-            reply = tok.decode(model.generate(c, temperature=0.8, ban_ids=(PAD, BOS, SEP, UNK)))
-            scores.append(score_reply(reply))
-        for c in data.c_val[: max(0, a.eval_replies - len(scores))]:  # top up with couplet first lines
-            nl = c.index(4) + 1 if 4 in c else len(c) // 2
-            reply = tok.decode(c[1:nl] + model.generate(c[:nl], temperature=0.8, ban_ids=(PAD, BOS, SEP, UNK)))
-            scores.append(score_reply(reply))
-        out["meter_rate"] = sum(s["meter_ok"] for s in scores) / len(scores)
-        out["rhyme_rate"] = sum(s["rhyme_ok"] for s in scores) / len(scores)
-        out["cy_rate"] = sum(s["cy_score"] >= 1.5 for s in scores) / len(scores)
-        out["two_line_rate"] = sum(len(s["syllables"]) == 2 for s in scores) / len(scores)
+        # Reply quality on held-out duel calls: raw (one unconstrained sample) and verse mode (meter-constrained,
+        # best of 8 by rhyme/meter/dialect) — the paper reports both, so decoding help is separable from learning.
+        calls = [tok.decode(p["call"]) for p in data.p_val if p["style"] == "duel"][: a.eval_replies]
+        for mode, suffix in (("raw", "_raw"), ("verse", "")):
+            scores = [gen_reply(model, tok, c, mode=mode, n=8, masks=masks)["scores"] for c in calls]
+            out["meter_rate" + suffix] = sum(s["meter_ok"] for s in scores) / len(scores)
+            out["rhyme_rate" + suffix] = sum(s["rhyme_ok"] for s in scores) / len(scores)
+            ok = [s for s in scores if len(s["syllables"]) == 2]
+            out["cy_rate" + suffix] = sum(s["cy_score"] >= 1.5 for s in ok) / len(scores)
+            out["two_line_rate" + suffix] = len(ok) / len(scores)
         model.train()
         return out
 
     def sample(phase):
         model.eval()
         for p in prompts:
-            ids = tok.encode(p["text"], bos=True) + [SEP]
-            reply = tok.decode(model.generate(ids, temperature=0.8, ban_ids=(PAD, BOS, SEP, UNK)))
-            log.sample(step, phase, prompt=p["text"], reply=reply, prompt_id=p["id"], **score_reply(reply))
+            v = gen_reply(model, tok, p["text"], mode="verse", n=16, masks=masks)
+            raw = gen_reply(model, tok, p["text"], mode="raw")
+            log.sample(step, phase, prompt=p["text"], reply=v["reply"], prompt_id=p["id"], true_reply=p.get("true_reply"),
+                       raw_reply=raw["reply"], mode="verse (best of 16)", **v["scores"])
         model.train()
 
     def save(tag):

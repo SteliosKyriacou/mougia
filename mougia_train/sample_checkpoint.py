@@ -17,8 +17,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, ROOT)
 from mougia_train.model import FlyBrainLM, load_graph  # noqa: E402
-from mougia_train.tokenizer import BOS, PAD, SEP, UNK, Tokenizer  # noqa: E402
-from mougia_train.train import DATA, GRAPHS, score_reply  # noqa: E402
+from mougia_train.generate import reply as gen_reply  # noqa: E402
+from mougia_train.tokenizer import Tokenizer  # noqa: E402
+from mougia_train.train import DATA, GRAPHS  # noqa: E402
 
 
 def load_model(ckpt_path, device="cuda"):
@@ -52,11 +53,11 @@ def main():
     with open(os.path.join(run_dir, "samples.jsonl"), "a", encoding="utf-8") as f:
         for p in prompts:
             for _ in range(a.n):
-                ids = tok.encode(p["text"], bos=True) + [SEP]
-                reply = tok.decode(model.generate(ids, temperature=a.temperature, ban_ids=(PAD, BOS, SEP, UNK)))
+                v = gen_reply(model, tok, p["text"], mode="verse", n=16, temperature=a.temperature)
+                reply = v["reply"]
                 rec = {"step": step, "elapsed_s": elapsed, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "phase": phase,
                        "prompt": p["text"], "reply": reply, "prompt_id": p["id"], "source": f"checkpoint {os.path.basename(a.checkpoint)}",
-                       **score_reply(reply)}
+                       "mode": "verse (best of 16)", **v["scores"]}
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 print("—", reply.replace("\n", " / "))
 

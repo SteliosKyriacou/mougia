@@ -160,6 +160,66 @@ class FlyBrainLM(nn.Module):
         return {name: p.numel() for name, p in self.named_parameters()}
 
     @torch.no_grad()
+    def generate_batch(self, prompt, n=16, max_new=70, temperature=0.8, top_k=40, ban_ids=(), verse=None, eos_id=3, nl_id=4):
+        """Sample n continuations of one prompt in parallel. Returns (list of id lists, mean log-prob per sample).
+
+        verse: optional dict(syllable=BoolTensor[V], word_start=BoolTensor[V], min_syl=13, max_syl=16) — enforces a
+        two-line couplet: no line break before min_syl syllables, after max_syl only the current word may finish,
+        line 1 must end with <nl> and line 2 with <eos>. The model still chooses every word."""
+        self.eval()
+        dev = self.crow.device
+        w = self.weights()
+        h = self.init_state(1)
+        o = None
+        for t in prompt:
+            h, o = self._step(h, self.embed(torch.tensor([t], device=dev)), w)
+        h, o = h.repeat(1, n), o.repeat(n, 1)
+        seqs = [[] for _ in range(n)]
+        logp = torch.zeros(n, device=dev)
+        count = torch.zeros(n, device=dev)
+        line = torch.zeros(n, dtype=torch.long, device=dev)
+        syl_n = torch.zeros(n, dtype=torch.long, device=dev)
+        done = torch.zeros(n, dtype=torch.bool, device=dev)
+        V = self.readout[-1].out_features
+        if verse:
+            is_syl = verse["syllable"].to(dev)
+            is_ws = verse["word_start"].to(dev)
+            lo, hi = verse.get("min_syl", 13), verse.get("max_syl", 16)
+        for _ in range(max_new):
+            logits = self.readout(o) / max(temperature, 1e-5)
+            if ban_ids:
+                logits[:, list(ban_ids)] = -1e9
+            if verse:
+                short = (syl_n < lo)[:, None]
+                ban = torch.zeros(n, V, dtype=torch.bool, device=dev)
+                ban[:, nl_id] |= short[:, 0] | (line == 1)
+                ban[:, eos_id] |= short[:, 0] | (line == 0)
+                ban |= (syl_n >= hi)[:, None] & (is_ws & is_syl)[None, :]       # finish the current word only
+                ban |= (syl_n >= hi + 2)[:, None] & is_syl[None, :]           # then end the line
+                logits = logits.masked_fill(ban, -1e9)
+            if top_k:
+                v, _ = torch.topk(logits, top_k, dim=-1)
+                logits = logits.masked_fill(logits < v[:, -1:], -1e9)
+            probs = F.softmax(logits, -1)
+            nxt = torch.multinomial(probs, 1)[:, 0]
+            lp = torch.log(probs.gather(1, nxt[:, None])[:, 0].clamp_min(1e-12))
+            live = ~done
+            logp += lp * live
+            count += live.float()
+            for i in torch.nonzero(live & (nxt != eos_id))[:, 0].tolist():
+                seqs[i].append(int(nxt[i]))
+            if verse:
+                syl_n = torch.where(nxt == nl_id, torch.zeros_like(syl_n), syl_n + is_syl[nxt].long())
+                line = line + (nxt == nl_id).long()
+            done |= nxt == eos_id
+            if verse:
+                done |= line >= 2
+            if bool(done.all()):
+                break
+            h, o = self._step(h, self.embed(nxt), w)
+        return seqs, (logp / count.clamp_min(1)).tolist()
+
+    @torch.no_grad()
     def generate(self, prompt, max_new=60, temperature=0.8, top_k=40, eos_id=3, ban_ids=()):
         """prompt: list[int]. Returns generated ids (without prompt)."""
         self.eval()
