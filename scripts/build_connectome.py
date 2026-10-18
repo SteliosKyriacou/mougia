@@ -1,0 +1,113 @@
+"""Turn the raw connectome tables into brain-only graphs for Kyriakou (female, FlyWire 783) and Markos (male CNS v1.0).
+
+Output: data/connectomes/processed/{female,male}_{full,central}.pt, each a dict with
+  n                 number of neurons
+  pre, post         int64 edge lists (neuron indices), one edge per connected pair with >= MIN_SYN synapses
+  syn               float32 synapse counts per edge
+  sign              float32 per-neuron sign from the predicted neurotransmitter (+1 excitatory, -1 inhibitory)
+  input_groups      {ORN type: [neuron indices]}  — the 53 olfactory receptor types (shared by both sexes)
+  output_groups     {DN type: [neuron indices]}   — descending neuron types present in BOTH sexes
+  neuron_type, superclass, ids  per-neuron metadata
+"full" = whole brain incl. optic lobes; "central" = without optic-lobe intrinsic / visual neurons (fast pilots).
+The input/output type lists are identical across sexes so only the wiring in between differs.
+"""
+import collections
+import json
+import os
+
+import numpy as np
+import pandas as pd
+import torch
+
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "connectomes")
+OUT = os.path.join(ROOT, "processed")
+MIN_SYN = 5  # FlyWire's standard threshold for a reliable connection
+INHIBITORY = {"gaba", "glutamate", "histamine"}  # glutamate acts mainly via GluCl (inhibitory) in the fly CNS
+
+MALE_BRAIN = {"ol_intrinsic", "cb_intrinsic", "visual_projection", "ol_sensory", "cb_sensory", "ascending_neuron",
+              "descending_neuron", "visual_centrifugal", "sensory_ascending", "cb_motor", "cb_endocrine",
+              "sensory_descending", "cb_efferent", "efferent_ascending", "efferent_descending"}
+OPTIC_MALE = {"ol_intrinsic", "visual_projection", "visual_centrifugal", "ol_sensory"}
+OPTIC_FEMALE = {"optic", "visual_projection", "visual_centrifugal"}
+
+
+def male():
+    d = os.path.join(ROOT, "male_cns_v1.0")
+    ann = pd.read_feather(os.path.join(d, "body-annotations-male-cns-v1.0-minconf-0.5.feather"))
+    ann = ann[ann.superclass.isin(MALE_BRAIN)].copy()
+    nt = pd.read_feather(os.path.join(d, "body-neurotransmitters-male-cns-v1.0.feather"))
+    nt["nt"] = nt.consensus_nt.where(nt.consensus_nt != "unclear", nt.celltype_predicted_nt)
+    ann = ann.merge(nt[["body", "nt"]], left_on="bodyId", right_on="body", how="left")
+    w = pd.read_feather(os.path.join(d, "connectome-weights-male-cns-v1.0-minconf-0.5-traced-only.feather"),
+                        columns=["body_pre", "body_post", "weight"])
+    ann["cls"] = ann["class"]
+    return dict(ids=ann.bodyId.to_numpy(), type=ann.type.fillna("").astype(str).to_numpy(),
+                fwtype=ann.flywireType.fillna(ann.type).fillna("").astype(str).to_numpy(),
+                superclass=ann.superclass.astype(str).to_numpy(), cls=ann.cls.fillna("").astype(str).to_numpy(),
+                nt=ann.nt.fillna("").astype(str).str.lower().to_numpy(),
+                edges=w.rename(columns={"body_pre": "pre", "body_post": "post", "weight": "syn"}),
+                optic=ann.superclass.isin(OPTIC_MALE).to_numpy(),
+                orn=(ann.cls == "olfactory").to_numpy() & ann.type.astype(str).str.startswith("ORN").to_numpy(),
+                dn=(ann.superclass == "descending_neuron").to_numpy())
+
+
+def female():
+    d = os.path.join(ROOT, "flywire_783")
+    ann = pd.read_csv(os.path.join(d, "Supplemental_file1_neuron_annotations.tsv"), sep="\t", low_memory=False)
+    conn = pd.read_feather(os.path.join(d, "proofread_connections_783.feather"), columns=["pre_pt_root_id", "post_pt_root_id", "syn_count"])
+    edges = conn.groupby(["pre_pt_root_id", "post_pt_root_id"], sort=False).syn_count.sum().reset_index()
+    edges.columns = ["pre", "post", "syn"]
+    t = ann.cell_type.fillna(ann.hemibrain_type).fillna("").astype(str)
+    return dict(ids=ann.root_id.to_numpy(), type=t.to_numpy(), fwtype=t.to_numpy(),
+                superclass=ann.super_class.astype(str).to_numpy(), cls=ann.cell_class.fillna("").astype(str).to_numpy(),
+                nt=ann.top_nt.fillna("").astype(str).str.lower().to_numpy(), edges=edges,
+                optic=ann.super_class.isin(OPTIC_FEMALE).to_numpy(),
+                orn=(ann.cell_class == "olfactory").to_numpy() & t.str.startswith("ORN").to_numpy(),
+                dn=(ann.super_class == "descending").to_numpy())
+
+
+def build(g, keep, in_types, out_types):
+    ids = g["ids"][keep]
+    index = pd.Series(np.arange(len(ids)), index=ids)
+    e = g["edges"]
+    e = e[(e.syn >= MIN_SYN) & e.pre.isin(index.index) & e.post.isin(index.index) & (e.pre != e.post)]
+    pre, post = index[e.pre.to_numpy()].to_numpy(), index[e.post.to_numpy()].to_numpy()
+    nt = g["nt"][keep]
+    sign = np.where(np.isin(nt, list(INHIBITORY)), -1.0, 1.0).astype(np.float32)
+    ftype = g["fwtype"][keep]
+    groups = lambda mask, types: {t: np.flatnonzero(mask & (ftype == t)).tolist() for t in types}
+    return {
+        "n": int(len(ids)), "pre": torch.from_numpy(pre.astype(np.int64)), "post": torch.from_numpy(post.astype(np.int64)),
+        "syn": torch.from_numpy(e.syn.to_numpy().astype(np.float32)), "sign": torch.from_numpy(sign),
+        "input_groups": groups(g["orn"][keep], in_types), "output_groups": groups(g["dn"][keep], out_types),
+        "neuron_type": ftype.tolist(), "superclass": g["superclass"][keep].tolist(), "ids": ids.tolist(),
+        "nt": nt.tolist(), "min_syn": MIN_SYN,
+    }
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    flies = {"female": female(), "male": male()}
+    # Shared interface: types present in both sexes.
+    in_types = sorted(set.intersection(*[set(g["fwtype"][g["orn"]]) for g in flies.values()]) - {""})
+    out_types = sorted(set.intersection(*[set(g["fwtype"][g["dn"]]) for g in flies.values()]) - {""})
+    summary = {"input_types": len(in_types), "output_types": len(out_types), "min_syn": MIN_SYN}
+    for sex, g in flies.items():
+        for region in ("full", "central"):
+            keep = np.ones(len(g["ids"]), bool) if region == "full" else ~g["optic"]
+            d = build(g, keep, in_types, out_types)
+            torch.save(d, os.path.join(OUT, f"{sex}_{region}.pt"))
+            summary[f"{sex}_{region}"] = {
+                "neurons": d["n"], "edges": int(len(d["pre"])), "synapses": int(d["syn"].sum()),
+                "inhibitory_frac": round(float((d["sign"] < 0).float().mean()), 3),
+                "input_neurons": sum(map(len, d["input_groups"].values())), "output_neurons": sum(map(len, d["output_groups"].values())),
+                "superclasses": dict(collections.Counter(d["superclass"]).most_common(8)),
+            }
+            print(sex, region, json.dumps(summary[f"{sex}_{region}"]))
+    with open(os.path.join(OUT, "summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    print(json.dumps({k: summary[k] for k in ("input_types", "output_types")}))
+
+
+if __name__ == "__main__":
+    main()
