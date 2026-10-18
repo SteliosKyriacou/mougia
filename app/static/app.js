@@ -52,6 +52,7 @@ function renderNav(route) {
     link("#/pairs", "Call → reply pairs", o.pairs),
     link("#/couplets", "All couplets", o.kept),
     h("h2", {}, "Model"),
+    link("#/chat", "Chat"),
     link("#/training", "Training"),
     link("#/brain", "Brain"));
   const groups = {};
@@ -218,6 +219,7 @@ async function route() {
     if (view === "source" && a) await viewSource(a);
     else if (view === "thread" && a && b != null) await viewThread(a, decodeURIComponent(b), c);
     else if (view === "pairs") await viewPairs();
+    else if (view === "chat") await window.MougiaChat.viewChat(main, { api, setTitle, verseLines });
     else if (view === "brain") await window.MougiaBrain.viewBrain(main, { api, setTitle });
     else if (view === "training") await window.MougiaTraining.viewTraining(main, { api, setTitle, verseLines, fmt });
     else if (view === "couplets") await viewSearch("");

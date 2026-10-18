@@ -180,6 +180,7 @@ class FlyBrainLM(nn.Module):
         line = torch.zeros(n, dtype=torch.long, device=dev)
         syl_n = torch.zeros(n, dtype=torch.long, device=dev)
         done = torch.zeros(n, dtype=torch.bool, device=dev)
+        prev_ns = torch.ones(n, dtype=torch.bool, device=dev)  # previous token carried no syllable (start counts as one)
         V = self.readout[-1].out_features
         if verse:
             is_syl = verse["syllable"].to(dev)
@@ -196,6 +197,9 @@ class FlyBrainLM(nn.Module):
                 ban[:, eos_id] |= short[:, 0] | (line == 0)
                 ban |= (syl_n >= hi)[:, None] & (is_ws & is_syl)[None, :]       # finish the current word only
                 ban |= (syl_n >= hi + 2)[:, None] & is_syl[None, :]           # then end the line
+                no_syl = ~is_syl
+                no_syl[nl_id] = no_syl[eos_id] = False
+                ban |= prev_ns[:, None] & no_syl[None, :]                     # no runs of consonant/punctuation tokens
                 logits = logits.masked_fill(ban, -1e9)
             if top_k:
                 v, _ = torch.topk(logits, top_k, dim=-1)
@@ -210,6 +214,7 @@ class FlyBrainLM(nn.Module):
                 seqs[i].append(int(nxt[i]))
             if verse:
                 syl_n = torch.where(nxt == nl_id, torch.zeros_like(syl_n), syl_n + is_syl[nxt].long())
+                prev_ns = ~is_syl[nxt]
                 line = line + (nxt == nl_id).long()
             done |= nxt == eos_id
             if verse:

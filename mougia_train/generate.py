@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
 from dialect import cypriot_score  # noqa: E402
 from greek_meter import is_15_syllable, rhymes, syllables  # noqa: E402
-from mougia_train.tokenizer import BOS, CONT, DUEL, PAD, SEP, UNK  # noqa: E402
+from mougia_train.tokenizer import BOS, CONT, DUEL, PAD, SEP, SPECIALS, UNK  # noqa: E402
 
 BAN = (PAD, BOS, SEP, UNK, DUEL, CONT)
 
@@ -23,9 +23,9 @@ def score_reply(text):
 
 def verse_masks(tok):
     V = len(tok)
-    junk = [i for i, s in enumerate(tok.itos) if any(ch.isdigit() or "a" <= ch <= "z" for ch in s.lstrip("▁"))]
+    junk = [i for i, s in enumerate(tok.itos) if i >= len(SPECIALS) and any(ch.isdigit() or "a" <= ch <= "z" for ch in s.lstrip("▁"))]
     return {"syllable": torch.tensor([tok.is_syllable(i) for i in range(V)]),
-            "word_start": torch.tensor([tok.is_word_start(i) for i in range(V)]), "min_syl": 13, "max_syl": 16,
+            "word_start": torch.tensor([tok.is_word_start(i) for i in range(V)]), "min_syl": 13, "max_syl": 15,
             "ban": junk}  # digits / Latin letters never belong in a tsiattisto
 
 

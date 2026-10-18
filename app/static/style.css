@@ -259,3 +259,23 @@ h2.section { font-size: 20px; margin: 32px 0 12px; }
 .brain-tools { position: absolute; right: 12px; top: 12px; display: flex; gap: 8px; }
 .brain-groups { margin: 12px 0; }
 @media (max-width: 860px) { .brain-stats { max-width: calc(100% - 28px); } .brain-tools { top: auto; bottom: 12px; } .brain-legend { bottom: 60px; } }
+
+/* ---------- Chat tab ---------- */
+.chat-log { display: flex; flex-direction: column; gap: 14px; margin: 0 0 16px; min-height: 120px; }
+.msg { max-width: 640px; width: 100%; }
+.msg.user { align-self: flex-end; }
+.msg.user .verse { border-left: 0; border-right: 3px solid var(--secondary); background: var(--fill); box-shadow: none; }
+.msg .who { font-size: 13px; color: var(--secondary); margin: 0 4px 4px; }
+.msg .typing { color: var(--secondary); font-size: 20px; letter-spacing: 4px; }
+.msg .error { border-color: var(--warn); color: var(--warn); font-family: var(--ui); font-size: 15px; }
+.cands { margin: 6px 4px 0; font-size: 13px; color: var(--secondary); }
+.cands summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.cand { border-top: 1px solid var(--separator); padding: 8px 0; }
+.cand .raw { font-size: 16px; color: var(--label); }
+.composer { position: sticky; bottom: 12px; display: flex; gap: 10px; align-items: flex-end; background: var(--surface);
+  border-radius: var(--radius); box-shadow: 0 4px 20px rgba(0,0,0,.08); padding: 10px; border: 1px solid var(--separator); }
+.chat-input { flex: 1; resize: vertical; min-height: 64px; border: 0; background: transparent; font: 19px/1.5 var(--verse); color: var(--label); outline: none; }
+.send-btn { border: 0; border-radius: 10px; min-height: 44px; padding: 0 18px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+.send-btn:disabled { opacity: .5; cursor: default; }
+.chat-hint { font-size: 13px; color: var(--secondary); margin: 6px 4px 12px; }
+.chat-examples { margin-bottom: 40px; }

@@ -342,9 +342,63 @@ def brain_edges(q):
     return body, meta
 
 
+# ---------- Chat: talk to any checkpoint ----------
+import threading
+
+_chat_lock = threading.Lock()
+_chat_models = collections.OrderedDict()
+
+
+def _chat_model(model_id):
+    """Load (and cache, up to 2) a checkpoint for generation. Imports the training code lazily."""
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, ".."))
+    from mougia_train.sample_checkpoint import load_model
+    if model_id in _chat_models:
+        _chat_models.move_to_end(model_id)
+        return _chat_models[model_id]
+    run, f = model_id[5:].split("/", 1)
+    path = os.path.join(RUNS, os.path.basename(run), "checkpoints", os.path.basename(f))
+    model, tok, ck = load_model(path)
+    _chat_models[model_id] = (model, tok, ck)
+    while len(_chat_models) > 2:
+        _, (m, _, _) = _chat_models.popitem(last=False)
+        del m
+        _torch().cuda.empty_cache()
+    return _chat_models[model_id]
+
+
+def chat_models(q):
+    return {"models": [m for m in brain_models(q)["models"] if m["id"].startswith("ckpt:")]}
+
+
+def chat(body):
+    import sys
+    if os.path.join(ROOT, "..") not in sys.path:
+        sys.path.insert(0, os.path.join(ROOT, ".."))
+    from mougia_train.generate import reply as gen_reply
+    model_id = body.get("model", "")
+    text = (body.get("text") or "").strip()[:400]
+    if not model_id.startswith("ckpt:") or not text:
+        raise ValueError("pick a checkpoint and write a couplet")
+    mode = body.get("mode") if body.get("mode") in ("verse", "raw") else "verse"
+    style = body.get("style") if body.get("style") in ("duel", "cont") else "duel"
+    temperature = min(1.5, max(0.2, float(body.get("temperature", 0.8))))
+    t0 = time.time()
+    with _chat_lock:
+        model, tok, ck = _chat_model(model_id)
+        out = gen_reply(model, tok, text, mode=mode, n=16, temperature=temperature, style=style)
+    args = ck.get("args", {})
+    return {"reply": out["reply"], "scores": out["scores"], "logp": out["logp"], "candidates": out["candidates"][:6],
+            "mode": mode, "style": style, "temperature": temperature, "step": ck.get("step"),
+            "poet": POET.get(args.get("sex"), "?"), "seconds": round(time.time() - t0, 2)}
+
+
+POST_ROUTES = {"/api/chat": chat}
+
 BINARY_ROUTES = {"/api/brain/neurons": brain_neurons, "/api/brain/edges": brain_edges}
 
-ROUTES = {"/api/brain/models": brain_models, "/api/runs": list_runs, "/api/run_series": run_series, "/api/run_samples": run_samples,
+ROUTES = {"/api/chat/models": chat_models, "/api/brain/models": brain_models, "/api/runs": list_runs, "/api/run_series": run_series, "/api/run_samples": run_samples,
           "/api/overview": lambda q: overview(), "/api/threads": list_threads, "/api/thread": get_thread,
           "/api/search": search, "/api/pairs": list_pairs}
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -364,6 +418,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send(500, "application/json; charset=utf-8", json.dumps({"error": f"{type(e).__name__}: {e}"}).encode())
             except Exception:
                 pass
+
+    def do_POST(self):
+        url = urllib.parse.urlparse(self.path)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if url.path not in POST_ROUTES or n > 20000:
+                return self.send(404, "application/json", b'{"error": "not found"}')
+            body = json.loads(self.rfile.read(n) or b"{}")
+            out = POST_ROUTES[url.path](body)
+            self.send(200, "application/json; charset=utf-8", json.dumps(out, ensure_ascii=False).encode())
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except ValueError as e:
+            self.send(400, "application/json; charset=utf-8", json.dumps({"error": str(e)}).encode())
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.send(500, "application/json; charset=utf-8", json.dumps({"error": f"{type(e).__name__}: {e}"}).encode())
 
     def _get(self):
         url = urllib.parse.urlparse(self.path)
