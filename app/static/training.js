@@ -7,6 +7,8 @@
     ["metrics", "train_loss", "Training loss", (v) => v.toFixed(3)],
     ["eval", "val_loss", "Validation loss", (v) => v.toFixed(3)],
     ["eval", "val_ppl", "Validation perplexity", (v) => compact(v)],
+    ["eval", "context_gain_duel", "Context gain: duels (nats; >0 = answers the call)", (v) => v.toFixed(2)],
+    ["eval", "context_gain_cont", "Context gain: continuations (nats)", (v) => v.toFixed(2)],
     ["eval", "meter_rate", "Replies with 15-syllable meter", pct],
     ["eval", "rhyme_rate", "Replies that rhyme", pct],
     ["eval", "cy_rate", "Replies that read as Cypriot", pct],

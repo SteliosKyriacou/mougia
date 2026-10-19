@@ -100,6 +100,8 @@ def rhymes(a, b):
     ka, kb = rhyme_key(a), rhyme_key(b)
     if not ka or not kb:
         return False
+    # a final -ν / -ς doesn't break a rhyme in Cypriot verse (επόνουν / γειτόνου)
+    ka, kb = re.sub(r"[νσ]$", "", ka), re.sub(r"[νσ]$", "", kb)
     if ka == kb:
         return True
     # tolerate a differing onset consonant: compare from the stressed vowel onward

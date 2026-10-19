@@ -46,6 +46,11 @@ def bucket(key, frac):
 
 
 def main():
+    global OUT
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=OUT, help="output folder (default data/processed/train)")
+    OUT = os.path.abspath(ap.parse_args().out)
     os.makedirs(OUT, exist_ok=True)
     couplets = [json.loads(l) for l in open(os.path.join(PROC, "couplets.jsonl"), encoding="utf-8")]
     duel_pairs = [json.loads(l) for l in open(os.path.join(PROC, "pairs.jsonl"), encoding="utf-8")]
@@ -62,15 +67,25 @@ def main():
     #   duel — a real call→reply exchange between two poets (battle style); strict replies weigh more
     #   cont — the next couplet of the same song / poem / thread, kept only when it is metrical and rhymes
     #          (teaches answering a couplet in context with meter + rhyme)
-    pairs, seen_pairs = [], set()
+    # Clean duel set: both sides must be proper verse (meter + rhyme) and Cypriot. Real written duels weigh most;
+    # synthetic duels (data/raw/synthetic_duels) are flagged so their share can be set at training time.
+    clean = lambda cid: strict(cid) and by_id[cid]["cy_score"] >= 1.5
+    pairs, seen_pairs, dropped_duels = [], set(), 0
     for p in duel_pairs:
-        pairs.append({"call": p["call"], "reply": p["reply"], "style": "duel", "w": 3.0 if strict(p["reply"]) else 1.0})
+        if not (clean(p["call"]) and clean(p["reply"])):
+            dropped_duels += 1
+            continue
+        synthetic = p["source"] == "synthetic_duels"
+        w = 1.0 if synthetic else (3.0 if p["source"] == "web_shapxar" else 2.0)
+        pairs.append({"call": p["call"], "reply": p["reply"], "style": "duel", "w": w, "synthetic": synthetic})
         seen_pairs.add((p["call"], p["reply"]))
     for key, rs in threads.items():
         rs.sort(key=lambda r: (r["order"] if r["order"] is not None else 1e9, r.get("segment") or 0, r["n"]))
         for a, b in zip(rs, rs[1:]):
             if a["cid"] != b["cid"] and (a["cid"], b["cid"]) not in seen_pairs and strict(b["cid"]):
-                pairs.append({"call": a["cid"], "reply": b["cid"], "style": "cont", "w": 1.0})
+                if key.startswith("synthetic_duels|"):
+                    continue  # consecutive turns of a synthetic duel are already duel pairs
+                pairs.append({"call": a["cid"], "reply": b["cid"], "style": "cont", "w": 1.0, "synthetic": False})
                 seen_pairs.add((a["cid"], b["cid"]))
 
     # Split by thread so an exchange never leaks; couplets that appear in a val pair are val too.
@@ -118,7 +133,8 @@ def main():
     enc_c = lambda c: tok.encode("\n".join(c["lines"]), bos=True, eos=True)
     style_id = {"duel": DUEL, "cont": CONT}
     enc_p = lambda p: {"call": tok.encode(by_id[p["call"]]["text"], bos=True) + [SEP, style_id[p["style"]]],
-                       "reply": tok.encode(by_id[p["reply"]]["text"], eos=True), "style": p["style"], "w": p["w"]}
+                       "reply": tok.encode(by_id[p["reply"]]["text"], eos=True), "style": p["style"], "w": p["w"],
+                       "synthetic": p["synthetic"]}
     torch.save(lm_train, os.path.join(OUT, "lm_train.pt"))
     torch.save(lm_val, os.path.join(OUT, "lm_val.pt"))
     torch.save([enc_c(c) for c in coup_train], os.path.join(OUT, "couplets_train.pt"))
@@ -149,7 +165,9 @@ def main():
              "pairs_train": len(pair_train), "pairs_val": len(pair_val), "sample_prompts": len(prompts),
              "pairs_train_by_style": dict(collections.Counter(p["style"] for p in pair_train)),
              "pairs_val_by_style": dict(collections.Counter(p["style"] for p in pair_val)),
-             "duel_train_strict": sum(1 for p in pair_train if p["style"] == "duel" and p["w"] > 1),
+             "duel_train_real": sum(1 for p in pair_train if p["style"] == "duel" and not p["synthetic"]),
+             "duel_train_synthetic": sum(1 for p in pair_train if p["style"] == "duel" and p["synthetic"]),
+             "duel_pairs_dropped_unclean": dropped_duels,
              "unk_rate_lm_val": round(float((lm_val == 1).float().mean()), 5)}
     json.dump(stats, open(os.path.join(OUT, "stats.json"), "w"), indent=2)
     print(json.dumps(stats, indent=2))

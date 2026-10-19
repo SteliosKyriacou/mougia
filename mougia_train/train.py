@@ -44,6 +44,7 @@ def parse():
     ap.add_argument("--wiring", choices=["connectome", "random"], default="connectome")
     ap.add_argument("--max-edges", type=int, default=0, help="keep only the strongest N connections (density matching)")
     ap.add_argument("--run-id", default=None)
+    ap.add_argument("--data", default=None, help="training-data folder from prepare.py (default data/processed/train)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ticks", type=int, default=3)
     ap.add_argument("--alpha", type=float, default=0.5)
@@ -136,6 +137,9 @@ def main():
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
     a = parse()
+    global DATA
+    if a.data:
+        DATA = os.path.abspath(a.data)
     random.seed(a.seed)
     torch.manual_seed(a.seed)
     dev = "cuda"
@@ -157,7 +161,7 @@ def main():
                   "input_types": model.n_in, "input_neurons": int(len(model.in_idx)), "output_types": model.n_out,
                   "output_neurons": int(len(model.out_idx)), "min_syn": graph.get("min_syn"), "wiring": a.wiring},
         "params": {"total": sum(params.values()), "edges": params.get("edge_logscale", 0), "by_tensor": params},
-        "data": data_stats, "vocab": len(tok), "sample_prompts": [p["id"] for p in prompts],
+        "data": data_stats, "data_dir": DATA, "vocab": len(tok), "sample_prompts": [p["id"] for p in prompts],
     }, sample_every_s=a.sample_every_min * 60)
 
     edge_params = [model.edge_logscale] if model.edge_logscale is not None else []
@@ -178,6 +182,18 @@ def main():
                 inp, tgt, mask = fn("val", **kw)
                 logits, _ = model(inp.to(dev), grad_ckpt=False)
                 out[name] = masked_ce(logits, tgt.to(dev), mask.to(dev)).item()
+            # Context gain: reply loss with someone else's call minus with the true call (nats/syllable).
+            # ≈0 means the model ignores what it is answering.
+            for style, n in (("duel", None), ("cont", 64)):
+                ps = [p for p in data.p_val if p["style"] == style][:n]
+                if len(ps) < 2:
+                    continue
+                losses = []
+                for calls in ([p["call"] for p in ps], [ps[(i + 1) % len(ps)]["call"] for i in range(len(ps))]):
+                    inp, tgt, mask = data.pad([c + p["reply"] for c, p in zip(calls, ps)], [len(c) for c in calls])
+                    logits, _ = model(inp.to(dev), grad_ckpt=False)
+                    losses.append(masked_ce(logits, tgt.to(dev), mask.to(dev)).item())
+                out[f"context_gain_{style}"] = losses[1] - losses[0]
         key = {"pretrain": "val_loss_lm", "couplets": "val_loss_couplets", "pairs": "val_loss_duel"}[phase]
         out["val_loss"] = out[key]
         out["val_ppl"] = math.exp(min(out["val_loss"], 20))

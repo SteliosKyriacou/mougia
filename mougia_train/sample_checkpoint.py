@@ -25,7 +25,8 @@ from mougia_train.train import DATA, GRAPHS  # noqa: E402
 def load_model(ckpt_path, device="cuda"):
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     a = ck["args"]
-    tok = Tokenizer.load(os.path.join(DATA, "tokenizer.json"))
+    data_dir = a.get("data") or DATA  # checkpoints remember which training-data folder (and tokenizer) they used
+    tok = Tokenizer.load(os.path.join(data_dir, "tokenizer.json"))
     graph = load_graph(os.path.join(GRAPHS, f"{a['sex']}_{a['region']}.pt"), wiring=a["wiring"], max_edges=a.get("max_edges") or None, seed=a["seed"])
     model = FlyBrainLM(graph, len(tok), d_model=a["d_model"], ticks=a["ticks"], alpha=a["alpha"],
                        learn_edges=not a["no_learn_edges"], readout_hidden=a["readout_hidden"])
@@ -49,7 +50,7 @@ def main():
             r = json.loads(line)
             if r.get("step", 0) <= step:
                 elapsed, phase = r.get("elapsed_s"), r.get("phase")
-    prompts = json.load(open(os.path.join(DATA, "sample_prompts.json"), encoding="utf-8"))
+    prompts = json.load(open(os.path.join(ck["args"].get("data") or DATA, "sample_prompts.json"), encoding="utf-8"))
     with open(os.path.join(run_dir, "samples.jsonl"), "a", encoding="utf-8") as f:
         for p in prompts:
             for _ in range(a.n):
