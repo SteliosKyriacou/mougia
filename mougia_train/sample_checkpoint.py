@@ -29,7 +29,9 @@ def load_model(ckpt_path, device="cuda"):
     tok = Tokenizer.load(os.path.join(data_dir, "tokenizer.json"))
     graph = load_graph(os.path.join(GRAPHS, f"{a['sex']}_{a['region']}.pt"), wiring=a["wiring"], max_edges=a.get("max_edges") or None, seed=a["seed"])
     model = FlyBrainLM(graph, len(tok), d_model=a["d_model"], ticks=a["ticks"], alpha=a["alpha"],
-                       learn_edges=not a["no_learn_edges"], readout_hidden=a["readout_hidden"])
+                       learn_edges=not a["no_learn_edges"], readout_hidden=a["readout_hidden"],
+                       learn_tau=not a.get("no_learn_tau", True), ctx_drive=not a.get("no_ctx_drive", True),
+                       dropout=a.get("dropout", 0.0))
     model.load_state_dict(ck["model"])
     return model.to(device).eval(), tok, ck
 

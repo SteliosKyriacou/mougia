@@ -55,12 +55,18 @@ def parse():
     ap.add_argument("--seq-len", type=int, default=64)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--edge-lr", type=float, default=2e-3)
-    ap.add_argument("--weight-decay", type=float, default=0.01)
+    ap.add_argument("--weight-decay", type=float, default=0.05)
+    ap.add_argument("--dropout", type=float, default=0.1, help="readout dropout")
+    ap.add_argument("--no-learn-tau", action="store_true", help="fixed integration rate for every neuron")
+    ap.add_argument("--no-ctx-drive", action="store_true", help="no running summary of the sequence into the input neurons")
+    ap.add_argument("--lm-replay", type=float, default=0.3, help="share of dialect-text batches mixed into later phases")
+    ap.add_argument("--edge-lr-after-pretrain", type=float, default=0.1, help="edge learning-rate multiplier after pretraining")
+    ap.add_argument("--patience", type=int, default=3, help="evals without val improvement before a later phase stops early")
     ap.add_argument("--warmup", type=int, default=200)
     ap.add_argument("--clip", type=float, default=1.0)
     ap.add_argument("--pretrain-tokens", type=float, default=11.5e6, help="≈2 passes over the dialect text")
-    ap.add_argument("--couplet-tokens", type=float, default=4.2e6, help="≈20 passes over the couplets")
-    ap.add_argument("--pair-tokens", type=float, default=2.5e6, help="≈20 passes over the reply tokens of all pairs")
+    ap.add_argument("--couplet-tokens", type=float, default=1.5e6, help="≈4 passes over the couplets (early stopping may end sooner)")
+    ap.add_argument("--pair-tokens", type=float, default=1.5e6, help="≈7 passes over the reply tokens of all pairs (early stopping may end sooner)")
     ap.add_argument("--duel-share", type=float, default=0.4, help="fraction of reply batches drawn from real duel pairs")
     ap.add_argument("--log-every", type=int, default=10)
     ap.add_argument("--eval-every-min", type=float, default=10)
@@ -146,7 +152,8 @@ def main():
     tok = Tokenizer.load(os.path.join(DATA, "tokenizer.json"))
     graph = load_graph(os.path.join(GRAPHS, f"{a.sex}_{a.region}.pt"), wiring=a.wiring, max_edges=a.max_edges or None, seed=a.seed)
     model = FlyBrainLM(graph, len(tok), d_model=a.d_model, ticks=a.ticks, alpha=a.alpha,
-                       learn_edges=not a.no_learn_edges, readout_hidden=a.readout_hidden).to(dev)
+                       learn_edges=not a.no_learn_edges, readout_hidden=a.readout_hidden, learn_tau=not a.no_learn_tau,
+                       ctx_drive=not a.no_ctx_drive, dropout=a.dropout).to(dev)
     data = Batches(a, tok)
     masks = verse_masks(tok)
     prompts = json.load(open(os.path.join(DATA, "sample_prompts.json"), encoding="utf-8"))
@@ -224,16 +231,33 @@ def main():
 
     model.train()
     try:
+        best = {}
+
+        def eval_and_track(phase):
+            """Evaluate, keep the best checkpoint per phase (by its val loss); returns True when it improved."""
+            res = evaluate(phase)
+            log.eval(step, phase, **res)
+            if res["val_loss"] < best.get(phase, float("inf")):
+                best[phase] = res["val_loss"]
+                save(f"best-{phase}")
+                return True
+            return False
+
         for phase, budget, batch_fn in phases:
-            seen, phase_start, t_last, tok_last = 0, step, time.time(), 0
+            seen, phase_start, t_last, tok_last, bad = 0, step, time.time(), 0, 0
             total_steps = None
+            if phase != "pretrain":  # slow down synapse learning once the language is in place
+                base_lrs[1] = a.edge_lr * a.edge_lr_after_pretrain
             while seen < budget:
-                inp, tgt, mask = batch_fn("train")
-                n_tok = int(mask.sum())
+                replay = phase != "pretrain" and random.random() < a.lm_replay
+                inp, tgt, mask = data.lm("train") if replay else batch_fn("train")
+                n_tok = 0 if replay else int(mask.sum())
+                if total_steps is None and n_tok:  # estimate steps in phase for the cosine schedule
+                    total_steps = max(1, int(budget / max(1, n_tok) / (1 - (a.lm_replay if phase != "pretrain" else 0))))
                 if total_steps is None:  # estimate steps in phase for the cosine schedule
                     total_steps = max(1, int(budget / max(1, n_tok)))
                 k = step - phase_start
-                scale = min(1.0, (k + 1) / a.warmup) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, k / total_steps))))
+                scale = min(1.0, (k + 1) / a.warmup) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, k / (total_steps or 1)))))
                 for g, lr in zip(opt.param_groups, base_lrs):
                     g["lr"] = lr * scale
                 logits, _ = model(inp.to(dev))
@@ -253,7 +277,8 @@ def main():
                     torch.cuda.synchronize()
                     dt = time.time() - t_last
                     ls = model.edge_logscale
-                    log.metrics(step, phase, train_loss=loss.item(), lr=opt.param_groups[0]["lr"], grad_norm=float(gn),
+                    log.metrics(step, phase, train_loss=loss.item(), lr=opt.param_groups[0]["lr"], grad_norm=float(gn), replay=replay,
+                                tau_mean=float(model.rates().mean()) if model.alpha_logit is not None else None,
                                 tokens_per_s=tok_last / max(dt, 1e-6), gpu_mem_gb=torch.cuda.max_memory_allocated() / 1e9,
                                 phase_progress=seen / budget, rho=model.rho.item(), in_gain=model.in_gain.item(),
                                 edge_scale_mean=float(ls.mean()) if ls is not None else None,
@@ -261,8 +286,12 @@ def main():
                     t_last, tok_last = time.time(), 0
                 if log.elapsed() - last_eval >= a.eval_every_min * 60:
                     with log.sampling():
-                        log.eval(step, phase, **evaluate(phase))
+                        improved = eval_and_track(phase)
                     last_eval = log.elapsed()
+                    bad = 0 if improved else bad + 1
+                    if phase != "pretrain" and bad >= a.patience:
+                        log.metrics(step, phase, event=f"early_stop after {bad} evals without improvement")
+                        break
                 if log.should_sample():
                     with log.sampling():
                         sample(phase)
@@ -272,9 +301,11 @@ def main():
                 if a.max_hours and log.elapsed() > a.max_hours * 3600:
                     raise TimeoutError
             with log.sampling():
-                log.eval(step, phase, **evaluate(phase))
+                eval_and_track(phase)
                 sample(phase)
             save(f"end-{phase}")
+            if phase != "pretrain" and phase in best:  # continue the next phase from this phase's best weights
+                model.load_state_dict(torch.load(os.path.join(log.dir, "checkpoints", f"best-{phase}.pt"), weights_only=False)["model"])
         log.close("finished")
     except TimeoutError:
         with log.sampling():

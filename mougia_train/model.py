@@ -74,7 +74,11 @@ def load_graph(path, wiring="connectome", max_edges=None, seed=0):
 
 
 class FlyBrainLM(nn.Module):
-    def __init__(self, graph, vocab_size, d_model=256, ticks=3, alpha=0.5, learn_edges=True, readout_hidden=512):
+    def __init__(self, graph, vocab_size, d_model=256, ticks=3, alpha=0.5, learn_edges=True, readout_hidden=512,
+                 learn_tau=False, ctx_drive=False, dropout=0.0):
+        """learn_tau: every neuron learns its own integration rate α_i ∈ (0.05, 1) — slow neurons can hold memory.
+        ctx_drive: the input neurons also receive a running summary (mean embedding) of everything heard so far in
+        the sequence, like a lingering smell, so the call stays present while the reply is produced."""
         super().__init__()
         n = graph["n"]
         self.n, self.ticks, self.alpha = n, ticks, alpha
@@ -99,6 +103,7 @@ class FlyBrainLM(nn.Module):
         self.register_buffer("col_t", post[perm_t].contiguous())
         self.edge_logscale = nn.Parameter(torch.zeros(len(w0))) if learn_edges else None
         self.rho = nn.Parameter(torch.tensor(1.0))
+        self.alpha_logit = nn.Parameter(torch.full((n, 1), math.log((alpha - 0.05) / (1 - alpha)))) if learn_tau else None
         self.bias = nn.Parameter(torch.zeros(n, 1))
 
         # Interface: ORN types in, DN types out (same type lists for both sexes).
@@ -113,9 +118,14 @@ class FlyBrainLM(nn.Module):
 
         self.embed = nn.Embedding(vocab_size, d_model)
         self.to_orn = nn.Linear(d_model, self.n_in)
+        self.ctx_to_orn = nn.Linear(d_model, self.n_in) if ctx_drive else None
         self.in_gain = nn.Parameter(torch.tensor(2.0))
-        self.readout = nn.Sequential(nn.LayerNorm(self.n_out), nn.Linear(self.n_out, readout_hidden), nn.GELU(),
-                                     nn.Linear(readout_hidden, vocab_size))
+        if dropout:
+            self.readout = nn.Sequential(nn.LayerNorm(self.n_out), nn.Dropout(dropout), nn.Linear(self.n_out, readout_hidden),
+                                         nn.GELU(), nn.Dropout(dropout), nn.Linear(readout_hidden, vocab_size))
+        else:
+            self.readout = nn.Sequential(nn.LayerNorm(self.n_out), nn.Linear(self.n_out, readout_hidden), nn.GELU(),
+                                         nn.Linear(readout_hidden, vocab_size))
         nn.init.normal_(self.embed.weight, std=0.5)
 
     # ---- structure ------------------------------------------------------------------------------
@@ -128,15 +138,22 @@ class FlyBrainLM(nn.Module):
         return torch.zeros(self.n, batch, device=self.crow.device)
 
     # ---- one syllable ---------------------------------------------------------------------------
-    def _step(self, h, x, w):
+    def rates(self):
+        return 0.05 + 0.95 * torch.sigmoid(self.alpha_logit) if self.alpha_logit is not None else self.alpha
+
+    def _step(self, h, x, w, ctx=None):
         """h: (N, B) state; x: (B, d) syllable embedding; w: connection strengths. Returns new state and DN readout."""
         S = _Structure(self)
-        drive = (self.to_orn(x) * self.in_gain).T  # (n_in, B)
+        d = self.to_orn(x)
+        if self.ctx_to_orn is not None and ctx is not None:
+            d = d + self.ctx_to_orn(ctx)
+        drive = (d * self.in_gain).T  # (n_in, B)
+        a = self.rates()
         inp = torch.zeros_like(h).index_add(0, self.in_idx, drive[self.in_type])
         inp = inp + self.bias
         for _ in range(self.ticks):
             rec = _ConnectomeMM.apply(w, torch.tanh(h), S)
-            h = (1 - self.alpha) * h + self.alpha * (self.rho * rec + inp)
+            h = (1 - a) * h + a * (self.rho * rec + inp)
         act = torch.tanh(h[self.out_idx])  # (n_dn, B)
         pooled = torch.zeros(self.n_out, h.shape[1], device=h.device).index_add(0, self.out_type, act) / self.out_count[:, None]
         return h, pooled.T
@@ -147,12 +164,14 @@ class FlyBrainLM(nn.Module):
         h = self.init_state(B) if h is None else h
         W = self.weights()
         x = self.embed(tokens)
+        ctx = torch.cumsum(x, 1) / torch.arange(1, L + 1, device=x.device)[None, :, None] if self.ctx_to_orn is not None else None
         outs = []
         for t in range(L):
+            c = ctx[:, t] if ctx is not None else None
             if grad_ckpt and self.training:
-                h, o = checkpoint(self._step, h, x[:, t], W, use_reentrant=False)
+                h, o = checkpoint(self._step, h, x[:, t], W, c, use_reentrant=False)
             else:
-                h, o = self._step(h, x[:, t], W)
+                h, o = self._step(h, x[:, t], W, c)
             outs.append(o)
         return self.readout(torch.stack(outs, 1)), h
 
@@ -171,9 +190,13 @@ class FlyBrainLM(nn.Module):
         w = self.weights()
         h = self.init_state(1)
         o = None
+        csum, cnt = 0, 0
         for t in prompt:
-            h, o = self._step(h, self.embed(torch.tensor([t], device=dev)), w)
+            e = self.embed(torch.tensor([t], device=dev))
+            csum, cnt = csum + e, cnt + 1
+            h, o = self._step(h, e, w, csum / cnt)
         h, o = h.repeat(1, n), o.repeat(n, 1)
+        csum = csum.repeat(n, 1)
         seqs = [[] for _ in range(n)]
         logp = torch.zeros(n, device=dev)
         count = torch.zeros(n, device=dev)
@@ -221,7 +244,9 @@ class FlyBrainLM(nn.Module):
                 done |= line >= 2
             if bool(done.all()):
                 break
-            h, o = self._step(h, self.embed(nxt), w)
+            e = self.embed(nxt)
+            csum, cnt = csum + e, cnt + 1
+            h, o = self._step(h, e, w, csum / cnt)
         return seqs, (logp / count.clamp_min(1)).tolist()
 
     @torch.no_grad()
