@@ -38,7 +38,7 @@ CY_PATTERNS = [
 ]
 # Markers of Cretan / other dialects or Standard Modern Greek idiom.
 NON_CY_PATTERNS = [
-    r"κρητ", r"μαντιναδ", r"χανι[αω]", r"ψηλορειτ", r"σφακι", r"ρεθυμν", r"λασιθ", r"ηρακλει",
+    r"\bκρητ", r"μαντιναδ", r"\bχανι[αω]", r"ψηλορειτ", r"\bσφακι", r"\bρεθυμν", r"\bλασιθ", r"\bηρακλει",
     r"\bηντα\b", r"\bντα\b", r"\bεπα\b", r"\bεδα\b", r"\bτση\b", r"\bτζη\b", r"\bτζοι\b", r"\bτσοι\b", r"\bχορευγ", r"\bκιανεισ\b", r"\bλυρα",
     r"\bθα\b",  # SMG future (Cypriot uses εννά); not decisive alone
     r"\bδεν\b",  # SMG negation (Cypriot verse often uses εν/δεν both); weak

@@ -96,12 +96,24 @@ def phonetic(s):
     return s
 
 
+CLITICS = {"μου", "σου", "του", "της", "τησ", "μας", "μασ", "σας", "σασ", "τους", "τουσ", "τον", "την", "το", "τα", "τες", "τεσ", "με", "σε"}
+
+
+def _strip_clitic(line):
+    """Drop a trailing clitic pronoun (… εν το ξέρει μου) so the rhyme is judged on the real final word."""
+    words = WORD_RE.findall(clean_line(line))
+    if len(words) > 1 and phonetic(words[-1]).replace("u", "ου") in CLITICS | {phonetic(c) for c in CLITICS}:
+        return " ".join(words[:-1])
+    return line
+
+
 def rhymes(a, b):
+    a, b = _strip_clitic(a), _strip_clitic(b)
     ka, kb = rhyme_key(a), rhyme_key(b)
     if not ka or not kb:
         return False
-    # a final -ν / -ς doesn't break a rhyme in Cypriot verse (επόνουν / γειτόνου)
-    ka, kb = re.sub(r"[νσ]$", "", ka), re.sub(r"[νσ]$", "", kb)
+    # a final -ν doesn't break a rhyme in Cypriot verse (επόνουν / γειτόνου); a final -ς does (μυαλόν ≠ πετεινός)
+    ka, kb = re.sub(r"ν$", "", ka), re.sub(r"ν$", "", kb)
     if ka == kb:
         return True
     # tolerate a differing onset consonant: compare from the stressed vowel onward
