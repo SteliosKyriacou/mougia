@@ -298,7 +298,8 @@ def _edges_for(model_id):
 
 
 def brain_neurons(q):
-    """Binary: Float32 xyz (normalised, y up) for every neuron, then Uint8 display group, then Uint8 role (1=input, 2=output)."""
+    """Binary: Float32 xyz (normalised, y up) for every neuron, then Uint8 display group, then Uint8 role
+    (1 = smell input, 2 = output, 3 = hearing input)."""
     import numpy as np
     g = load_graph_file(q.get("graph", "female_full"))
     pos = g["pos"].numpy().astype(np.float64)
@@ -314,6 +315,7 @@ def brain_neurons(q):
     role = np.zeros(g["n"], np.uint8)
     role[[i for v in g["input_groups"].values() for i in v]] = 1
     role[[i for v in g["output_groups"].values() for i in v]] = 2
+    role[[i for v in g.get("audio_groups", {}).values() for i in v]] = 3  # hearing (Johnston's organ)
     meta = {"n": g["n"], "groups": [x[0] for x in SUPERCLASS_GROUPS], "estimated": int(g["pos_estimated"].sum()),
             "edges": int(len(g["pre"]))}
     return pos.astype(np.float32).tobytes() + grp.tobytes() + role.tobytes(), meta

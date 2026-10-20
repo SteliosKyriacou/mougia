@@ -15,10 +15,10 @@ run() {
   echo "$(date '+%F %T') end $id ($(cat runs/$id/status.json 2>/dev/null))"
 }
 
-# v3: data with 600 synthetic duels + clean real duels; early stopping, LM replay, learnable time constants,
-# context drive. Markos-matched comes second so the fair Kyriakou-vs-Markos pair finishes first.
-run v3-kyriakou-full          --sex female --region full
-run v3-markos-full-matched    --sex male   --region full --max-edges $FEMALE_EDGES
-run v3-kyriakou-full-random   --sex female --region full --wiring random
-run v3-markos-full            --sex male   --region full
-run v3-markos-full-random     --sex male   --region full --wiring random --max-edges $FEMALE_EDGES
+# v4: same data as v3 (600 synthetic duels + clean real duels) + EARS: the call enters through 567 auditory
+# neurons, own words through 2,210 olfactory neurons, reply read from 1,192 descending neurons (fair per-type counts).
+run v4-kyriakou-full          --sex female --region full
+run v4-markos-full-matched    --sex male   --region full --max-edges $FEMALE_EDGES
+run v4-kyriakou-full-random   --sex female --region full --wiring random
+run v4-markos-full            --sex male   --region full
+run v4-markos-full-random     --sex male   --region full --wiring random --max-edges $FEMALE_EDGES

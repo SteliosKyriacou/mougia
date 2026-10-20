@@ -236,10 +236,10 @@ h2.section { font-size: 20px; margin: 32px 0 12px; }
 /* ---------- Brain tab ---------- */
 :root {
   --div-neg: #2a78d6; --div-mid: #e2e1dc; --div-pos: #e34948;   /* diverging blue ↔ gray ↔ red */
-  --neuron: #8e8e93; --role-in: #1baf7a; --role-out: #eda100;
+  --neuron: #8e8e93; --role-in: #1baf7a; --role-out: #eda100; --role-ear: #6250d6;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767; --neuron: #636366; --role-in: #199e70; --role-out: #c98500; }
+  :root { --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767; --neuron: #636366; --role-in: #199e70; --role-out: #c98500; --role-ear: #9085e9; }
 }
 .select { min-height: 36px; border-radius: 10px; border: 1px solid var(--separator); background: var(--surface); padding: 0 10px; font-size: 15px; max-width: 100%; }
 .brain-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }

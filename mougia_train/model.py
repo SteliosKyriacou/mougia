@@ -75,10 +75,14 @@ def load_graph(path, wiring="connectome", max_edges=None, seed=0):
 
 class FlyBrainLM(nn.Module):
     def __init__(self, graph, vocab_size, d_model=256, ticks=3, alpha=0.5, learn_edges=True, readout_hidden=512,
-                 learn_tau=False, ctx_drive=False, dropout=0.0):
+                 learn_tau=False, ctx_drive=False, dropout=0.0, interface="type", sep_id=5):
         """learn_tau: every neuron learns its own integration rate α_i ∈ (0.05, 1) — slow neurons can hold memory.
         ctx_drive: the input neurons also receive a running summary (mean embedding) of everything heard so far in
-        the sequence, like a lingering smell, so the call stays present while the reply is produced."""
+        the sequence, like a lingering smell, so the call stays present while the reply is produced.
+        interface="neuron" (v4): every olfactory receptor neuron and every descending neuron is its own channel
+        (fair per-type counts, identical in both sexes), and the fly gets EARS: tokens before <sep> (the rival's
+        call) arrive through Johnston's-organ auditory neurons, its own words through the olfactory neurons, and
+        while it answers the auditory neurons keep receiving an echo (mean) of the call."""
         super().__init__()
         n = graph["n"]
         self.n, self.ticks, self.alpha = n, ticks, alpha
@@ -106,7 +110,22 @@ class FlyBrainLM(nn.Module):
         self.alpha_logit = nn.Parameter(torch.full((n, 1), math.log((alpha - 0.05) / (1 - alpha)))) if learn_tau else None
         self.bias = nn.Parameter(torch.zeros(n, 1))
 
-        # Interface: ORN types in, DN types out (same type lists for both sexes).
+        self.interface, self.sep_id = interface, sep_id
+        if interface == "neuron":
+            self.register_buffer("in_idx", torch.tensor(graph["input_neurons"], dtype=torch.int64))
+            self.register_buffer("au_idx", torch.tensor(graph["audio_neurons"], dtype=torch.int64))
+            self.register_buffer("out_idx", torch.tensor(graph["output_neurons"], dtype=torch.int64))
+            self.n_in, self.n_au, self.n_out = len(self.in_idx), len(self.au_idx), len(self.out_idx)
+            self.embed = nn.Embedding(vocab_size, d_model)
+            self.to_orn = nn.Linear(d_model, self.n_in)      # own syllable -> smell
+            self.to_jo = nn.Linear(d_model, self.n_au)       # heard syllable -> hearing
+            self.to_echo = nn.Linear(d_model, self.n_au, bias=False)  # echo of the call while answering
+            self.ctx_to_orn = None
+            self.in_gain = nn.Parameter(torch.tensor(2.0))
+            self._build_readout(readout_hidden, vocab_size, dropout)
+            nn.init.normal_(self.embed.weight, std=0.5)
+            return
+        # Interface (v1–v3): ORN types in, DN types out (same type lists for both sexes).
         in_groups = [v for v in graph["input_groups"].values()]
         out_groups = [v for v in graph["output_groups"].values()]
         self.register_buffer("in_idx", torch.tensor([i for g in in_groups for i in g], dtype=torch.int64))
@@ -120,13 +139,16 @@ class FlyBrainLM(nn.Module):
         self.to_orn = nn.Linear(d_model, self.n_in)
         self.ctx_to_orn = nn.Linear(d_model, self.n_in) if ctx_drive else None
         self.in_gain = nn.Parameter(torch.tensor(2.0))
+        self._build_readout(readout_hidden, vocab_size, dropout)
+        nn.init.normal_(self.embed.weight, std=0.5)
+
+    def _build_readout(self, readout_hidden, vocab_size, dropout):
         if dropout:
             self.readout = nn.Sequential(nn.LayerNorm(self.n_out), nn.Dropout(dropout), nn.Linear(self.n_out, readout_hidden),
                                          nn.GELU(), nn.Dropout(dropout), nn.Linear(readout_hidden, vocab_size))
         else:
             self.readout = nn.Sequential(nn.LayerNorm(self.n_out), nn.Linear(self.n_out, readout_hidden), nn.GELU(),
                                          nn.Linear(readout_hidden, vocab_size))
-        nn.init.normal_(self.embed.weight, std=0.5)
 
     # ---- structure ------------------------------------------------------------------------------
     def weights(self):
@@ -141,20 +163,31 @@ class FlyBrainLM(nn.Module):
     def rates(self):
         return 0.05 + 0.95 * torch.sigmoid(self.alpha_logit) if self.alpha_logit is not None else self.alpha
 
-    def _step(self, h, x, w, ctx=None):
-        """h: (N, B) state; x: (B, d) syllable embedding; w: connection strengths. Returns new state and DN readout."""
+    def _step(self, h, x, w, ctx=None, heard=None, echo=None):
+        """h: (N, B) state; x: (B, d) syllable embedding; w: connection strengths.
+        neuron interface: heard (B,) 1 = this syllable is the rival's (→ hearing), 0 = own (→ smell);
+        echo (B, d) = mean embedding of the call heard so far. Returns new state and the readout features."""
         S = _Structure(self)
-        d = self.to_orn(x)
-        if self.ctx_to_orn is not None and ctx is not None:
-            d = d + self.ctx_to_orn(ctx)
-        drive = (d * self.in_gain).T  # (n_in, B)
         a = self.rates()
-        inp = torch.zeros_like(h).index_add(0, self.in_idx, drive[self.in_type])
+        if self.interface == "neuron":
+            own = 1.0 - heard
+            orn = self.to_orn(x) * own[:, None]
+            jo = self.to_jo(x) * heard[:, None] + self.to_echo(echo) * own[:, None]
+            inp = torch.zeros_like(h).index_add(0, self.in_idx, (orn * self.in_gain).T)
+            inp = inp.index_add(0, self.au_idx, (jo * self.in_gain).T)
+        else:
+            d = self.to_orn(x)
+            if self.ctx_to_orn is not None and ctx is not None:
+                d = d + self.ctx_to_orn(ctx)
+            drive = (d * self.in_gain).T  # (n_in, B)
+            inp = torch.zeros_like(h).index_add(0, self.in_idx, drive[self.in_type])
         inp = inp + self.bias
         for _ in range(self.ticks):
             rec = _ConnectomeMM.apply(w, torch.tanh(h), S)
             h = (1 - a) * h + a * (self.rho * rec + inp)
         act = torch.tanh(h[self.out_idx])  # (n_dn, B)
+        if self.interface == "neuron":
+            return h, act.T
         pooled = torch.zeros(self.n_out, h.shape[1], device=h.device).index_add(0, self.out_type, act) / self.out_count[:, None]
         return h, pooled.T
 
@@ -165,13 +198,22 @@ class FlyBrainLM(nn.Module):
         W = self.weights()
         x = self.embed(tokens)
         ctx = torch.cumsum(x, 1) / torch.arange(1, L + 1, device=x.device)[None, :, None] if self.ctx_to_orn is not None else None
+        heard = echo = None
+        if self.interface == "neuron":
+            # Before the first <sep> = the rival's call (heard); rows without <sep> are all the fly's own words.
+            is_sep = tokens == self.sep_id
+            heard = ((torch.cumsum(is_sep.long(), 1) == 0) & is_sep.any(1, keepdim=True)).float()
+            cnt = torch.cumsum(heard, 1).clamp_min(1)[..., None]
+            echo = torch.cumsum(x * heard[..., None], 1) / cnt
         outs = []
         for t in range(L):
             c = ctx[:, t] if ctx is not None else None
+            hd = heard[:, t] if heard is not None else None
+            ec = echo[:, t] if echo is not None else None
             if grad_ckpt and self.training:
-                h, o = checkpoint(self._step, h, x[:, t], W, c, use_reentrant=False)
+                h, o = checkpoint(self._step, h, x[:, t], W, c, hd, ec, use_reentrant=False)
             else:
-                h, o = self._step(h, x[:, t], W, c)
+                h, o = self._step(h, x[:, t], W, c, hd, ec)
             outs.append(o)
         return self.readout(torch.stack(outs, 1)), h
 
@@ -191,12 +233,21 @@ class FlyBrainLM(nn.Module):
         h = self.init_state(1)
         o = None
         csum, cnt = 0, 0
+        hsum, hcnt = torch.zeros(1, self.embed.embedding_dim, device=dev), 0
+        listening = self.sep_id in prompt  # the call is heard until <sep>
         for t in prompt:
             e = self.embed(torch.tensor([t], device=dev))
             csum, cnt = csum + e, cnt + 1
-            h, o = self._step(h, e, w, csum / cnt)
+            if listening and t == self.sep_id:
+                listening = False
+            hd = torch.tensor([1.0 if listening else 0.0], device=dev)
+            if listening:
+                hsum, hcnt = hsum + e, hcnt + 1
+            h, o = self._step(h, e, w, csum / cnt, hd, hsum / max(hcnt, 1))
         h, o = h.repeat(1, n), o.repeat(n, 1)
         csum = csum.repeat(n, 1)
+        echo = (hsum / max(hcnt, 1)).repeat(n, 1)
+        own = torch.zeros(n, device=dev)
         seqs = [[] for _ in range(n)]
         logp = torch.zeros(n, device=dev)
         count = torch.zeros(n, device=dev)
@@ -246,30 +297,11 @@ class FlyBrainLM(nn.Module):
                 break
             e = self.embed(nxt)
             csum, cnt = csum + e, cnt + 1
-            h, o = self._step(h, e, w, csum / cnt)
+            h, o = self._step(h, e, w, csum / cnt, own, echo)
         return seqs, (logp / count.clamp_min(1)).tolist()
 
     @torch.no_grad()
     def generate(self, prompt, max_new=60, temperature=0.8, top_k=40, eos_id=3, ban_ids=()):
-        """prompt: list[int]. Returns generated ids (without prompt)."""
-        self.eval()
-        dev = self.crow.device
-        W = self.weights()
-        h = self.init_state(1)
-        o = None
-        for t in prompt:
-            h, o = self._step(h, self.embed(torch.tensor([t], device=dev)), W)
-        out = []
-        for _ in range(max_new):
-            logits = self.readout(o)[0] / max(temperature, 1e-5)
-            for b in ban_ids:
-                logits[b] = -1e9
-            if top_k:
-                v, _ = torch.topk(logits, top_k)
-                logits[logits < v[-1]] = -1e9
-            nxt = int(torch.multinomial(F.softmax(logits, -1), 1))
-            if nxt == eos_id:
-                break
-            out.append(nxt)
-            h, o = self._step(h, self.embed(torch.tensor([nxt], device=dev)), W)
-        return out
+        """Single unconstrained sample (kept for compatibility)."""
+        seqs, _ = self.generate_batch(prompt, n=1, max_new=max_new, temperature=temperature, top_k=top_k, ban_ids=ban_ids, eos_id=eos_id)
+        return seqs[0]

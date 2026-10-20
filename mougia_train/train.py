@@ -58,6 +58,10 @@ def parse():
     ap.add_argument("--weight-decay", type=float, default=0.05)
     ap.add_argument("--dropout", type=float, default=0.1, help="readout dropout")
     ap.add_argument("--no-learn-tau", action="store_true", help="fixed integration rate for every neuron")
+    ap.add_argument("--interface", choices=["neuron", "type"], default="neuron",
+                    help="neuron (v4): per-neuron smell/hearing inputs and per-neuron readout; type: v1–v3 per-type channels")
+    ap.add_argument("--heard-split", type=float, default=0.5,
+                    help="share of dialect-text windows split into a heard part and an own part with <sep> (trains the ears)")
     ap.add_argument("--no-ctx-drive", action="store_true", help="no running summary of the sequence into the input neurons")
     ap.add_argument("--lm-replay", type=float, default=0.3, help="share of dialect-text batches mixed into later phases")
     ap.add_argument("--edge-lr-after-pretrain", type=float, default=0.1, help="edge learning-rate multiplier after pretraining")
@@ -89,11 +93,19 @@ class Batches:
         self.p_val = torch.load(os.path.join(DATA, "pairs_val.pt"))
 
     def lm(self, split="train", n=None):
+        """Dialect-text windows. With probability heard_split a <sep> is inserted at a random point: the text before
+        it is 'heard' (auditory input), the rest is the fly's own continuation — so the ears learn on lots of text."""
         src = self.lm_train if split == "train" else self.lm_val
         B, L = n or self.a.batch, self.a.seq_len
         starts = torch.randint(0, len(src) - L - 1, (B,))
         x = torch.stack([src[s:s + L + 1] for s in starts])
-        return x[:, :-1], x[:, 1:], torch.ones(B, L, dtype=torch.bool)
+        if self.a.interface == "neuron" and split == "train" and self.a.heard_split > 0:
+            for i in range(B):
+                if random.random() < self.a.heard_split:
+                    k = random.randint(8, L - 8)
+                    x[i] = torch.cat([x[i, :k], torch.tensor([SEP]), x[i, k:L]])
+        mask = x[:, 1:] != SEP  # never ask the model to predict the inserted <sep>
+        return x[:, :-1], x[:, 1:], mask
 
     @staticmethod
     def pad(seqs, loss_from):
@@ -153,7 +165,8 @@ def main():
     graph = load_graph(os.path.join(GRAPHS, f"{a.sex}_{a.region}.pt"), wiring=a.wiring, max_edges=a.max_edges or None, seed=a.seed)
     model = FlyBrainLM(graph, len(tok), d_model=a.d_model, ticks=a.ticks, alpha=a.alpha,
                        learn_edges=not a.no_learn_edges, readout_hidden=a.readout_hidden, learn_tau=not a.no_learn_tau,
-                       ctx_drive=not a.no_ctx_drive, dropout=a.dropout).to(dev)
+                       ctx_drive=not a.no_ctx_drive and a.interface == "type", dropout=a.dropout,
+                       interface=a.interface, sep_id=SEP).to(dev)
     data = Batches(a, tok)
     masks = verse_masks(tok)
     prompts = json.load(open(os.path.join(DATA, "sample_prompts.json"), encoding="utf-8"))
@@ -165,7 +178,8 @@ def main():
     log = RunLogger(run_id, {
         "label": label, "poet": POETS[a.sex]["name"], "sex": a.sex, "connectome": POETS[a.sex]["connectome"], "args": vars(a),
         "graph": {"neurons": graph["n"], "edges": int(len(graph["pre"])), "synapses": int(graph["syn"].sum()),
-                  "input_types": model.n_in, "input_neurons": int(len(model.in_idx)), "output_types": model.n_out,
+                  "interface": a.interface, "input_neurons": int(len(model.in_idx)),
+                  "audio_neurons": int(len(model.au_idx)) if a.interface == "neuron" else 0, "output_channels": model.n_out,
                   "output_neurons": int(len(model.out_idx)), "min_syn": graph.get("min_syn"), "wiring": a.wiring},
         "params": {"total": sum(params.values()), "edges": params.get("edge_logscale", 0), "by_tensor": params},
         "data": data_stats, "data_dir": DATA, "vocab": len(tok), "sample_prompts": [p["id"] for p in prompts],

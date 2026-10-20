@@ -50,7 +50,8 @@ def male():
                 edges=w.rename(columns={"body_pre": "pre", "body_post": "post", "weight": "syn"}),
                 optic=ann.superclass.isin(OPTIC_MALE).to_numpy(),
                 orn=(ann.cls == "olfactory").to_numpy() & ann.type.astype(str).str.startswith("ORN").to_numpy(),
-                dn=(ann.superclass == "descending_neuron").to_numpy(), pos=pos)
+                dn=(ann.superclass == "descending_neuron").to_numpy(), pos=pos,
+                jo=ann.type.astype(str).str.startswith("JO").to_numpy())
 
 
 def female():
@@ -66,6 +67,7 @@ def female():
                 optic=ann.super_class.isin(OPTIC_FEMALE).to_numpy(),
                 orn=(ann.cell_class == "olfactory").to_numpy() & t.str.startswith("ORN").to_numpy(),
                 dn=(ann.super_class == "descending").to_numpy(),
+                jo=t.str.startswith("JO").to_numpy(),
                 pos=ann[["pos_x", "pos_y", "pos_z"]].to_numpy(float) * np.array([4.0, 4.0, 40.0]))
 
 
@@ -90,7 +92,7 @@ def fill_positions(pos, pre, post, syn, rounds=5):
     return pos, estimated
 
 
-def build(g, keep, in_types, out_types):
+def build(g, keep, in_types, out_types, audio_types=(), fair=None):
     ids = g["ids"][keep]
     index = pd.Series(np.arange(len(ids)), index=ids)
     e = g["edges"]
@@ -101,14 +103,25 @@ def build(g, keep, in_types, out_types):
     ftype = g["fwtype"][keep]
     pos, estimated = fill_positions(g["pos"][keep], pre, post, e.syn.to_numpy())
     groups = lambda mask, types: {t: np.flatnonzero(mask & (ftype == t)).tolist() for t in types}
-    return {
+    d = {
         "n": int(len(ids)), "pre": torch.from_numpy(pre.astype(np.int64)), "post": torch.from_numpy(post.astype(np.int64)),
         "syn": torch.from_numpy(e.syn.to_numpy().astype(np.float32)), "sign": torch.from_numpy(sign),
         "input_groups": groups(g["orn"][keep], in_types), "output_groups": groups(g["dn"][keep], out_types),
+        "audio_groups": groups(g["jo"][keep], audio_types),
         "neuron_type": ftype.tolist(), "superclass": g["superclass"][keep].tolist(), "ids": ids.tolist(),
         "nt": nt.tolist(), "min_syn": MIN_SYN,
         "pos": torch.from_numpy(pos.astype(np.float32)), "pos_estimated": torch.from_numpy(estimated),
     }
+    # Fair per-neuron interface: per cell type, the same number of neurons in both sexes (the smaller count),
+    # chosen deterministically (lowest ids). Order = type order, so channel k means the same cell type in both flies.
+    if fair:
+        for name, key in (("input_neurons", "input_groups"), ("audio_neurons", "audio_groups"), ("output_neurons", "output_groups")):
+            idx = []
+            for t in sorted(d[key]):
+                members = sorted(d[key][t], key=lambda i: ids[i])
+                idx += members[: fair[key].get(t, 0)]
+            d[name] = idx
+    return d
 
 
 def main():
@@ -117,23 +130,31 @@ def main():
     # Shared interface: types present in both sexes.
     in_types = sorted(set.intersection(*[set(g["fwtype"][g["orn"]]) for g in flies.values()]) - {""})
     out_types = sorted(set.intersection(*[set(g["fwtype"][g["dn"]]) for g in flies.values()]) - {""})
-    summary = {"input_types": len(in_types), "output_types": len(out_types), "min_syn": MIN_SYN}
+    audio_types = sorted(set.intersection(*[set(g["fwtype"][g["jo"]]) for g in flies.values()]) - {""})
+    # per-type neuron counts in each sex (whole brain), fair count = the smaller one
+    fair = {}
+    for key, mask, types in (("input_groups", "orn", in_types), ("audio_groups", "jo", audio_types), ("output_groups", "dn", out_types)):
+        counts = [{t: int(((g["fwtype"] == t) & g[mask]).sum()) for t in types} for g in flies.values()]
+        fair[key] = {t: min(c[t] for c in counts) for t in types}
+    summary = {"input_types": len(in_types), "output_types": len(out_types), "audio_types": len(audio_types), "min_syn": MIN_SYN}
     for sex, g in flies.items():
         for region in ("full", "central"):
             keep = np.ones(len(g["ids"]), bool) if region == "full" else ~g["optic"]
-            d = build(g, keep, in_types, out_types)
+            d = build(g, keep, in_types, out_types, audio_types, fair)
             torch.save(d, os.path.join(OUT, f"{sex}_{region}.pt"))
             summary[f"{sex}_{region}"] = {
                 "neurons": d["n"], "edges": int(len(d["pre"])), "synapses": int(d["syn"].sum()),
                 "inhibitory_frac": round(float((d["sign"] < 0).float().mean()), 3),
                 "input_neurons": sum(map(len, d["input_groups"].values())), "output_neurons": sum(map(len, d["output_groups"].values())),
                 "positions_estimated": int(d["pos_estimated"].sum()),
+                "fair_input_neurons": len(d["input_neurons"]), "fair_audio_neurons": len(d["audio_neurons"]),
+                "fair_output_neurons": len(d["output_neurons"]),
                 "superclasses": dict(collections.Counter(d["superclass"]).most_common(8)),
             }
             print(sex, region, json.dumps(summary[f"{sex}_{region}"]))
     with open(os.path.join(OUT, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
-    print(json.dumps({k: summary[k] for k in ("input_types", "output_types")}))
+    print(json.dumps({k: summary[k] for k in ("input_types", "output_types", "audio_types")}))
 
 
 if __name__ == "__main__":

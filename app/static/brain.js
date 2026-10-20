@@ -64,7 +64,7 @@
     stage.append(stats, legend, tools);
     main.append(controls, h("div", { class: "brain-card" }, stage), groupsRow,
       h("p", { class: "summary" }, "Drag to rotate, scroll or pinch to zoom, right-drag to pan. Points are neurons at their positions in the brain; ",
-        "olfactory receptor neurons (where syllables enter) and descending neurons (where replies are read out) are highlighted. ",
+        "the fly hears its rival through Johnston’s-organ auditory neurons, smells its own words through olfactory receptor neurons, and answers through descending neurons; all three are highlighted. ",
         "Lines are connections, coloured by the signed weight the model uses: synapse count normalised by the neuron’s total input, times the learned scale for checkpoints."));
 
     function syncSeg() {
@@ -124,7 +124,8 @@
         h("div", { class: "legend-bar", style: `background: linear-gradient(90deg, ${neg}, ${mid}, ${pos})`, "aria-hidden": "true" }),
         h("div", { class: "legend-labels" }, h("span", {}, `← ${left}`), h("span", {}, change ? "unchanged" : "weak"), h("span", {}, `${right} →`)),
         h("div", { class: "legend-keys" },
-          h("span", {}, h("span", { class: "dot", style: `background:${css("--role-in")}` }), "input (olfactory receptors)"),
+          h("span", {}, h("span", { class: "dot", style: `background:${css("--role-in")}` }), "smell: own words (olfactory)"),
+          h("span", {}, h("span", { class: "dot", style: `background:${css("--role-ear")}` }), "hearing: rival’s call (Johnston’s organ)"),
           h("span", {}, h("span", { class: "dot", style: `background:${css("--role-out")}` }), "output (descending)")),
         ...(change && !meta.learned ? [h("div", { class: "tip-label" }, "This model has no learned changes; pick a checkpoint.")] : []));
     }
@@ -165,7 +166,7 @@
 
     function drawNeurons(nd) {
       for (const o of [view.points, view.roles]) if (o) { view.scene.remove(o); o.geometry.dispose(); o.material.dispose(); }
-      const base = hexToRgb(css("--neuron")), cin = hexToRgb(css("--role-in")), cout = hexToRgb(css("--role-out"));
+      const base = hexToRgb(css("--neuron")), cin = hexToRgb(css("--role-in")), cout = hexToRgb(css("--role-out")), cear = hexToRgb(css("--role-ear"));
       const n = nd.meta.n;
       const layer = (want, size, opacity) => {
         const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
@@ -173,7 +174,7 @@
         for (let i = 0; i < n; i++) {
           if (!want(i)) continue;
           pos.set(nd.pos.subarray(i * 3, i * 3 + 3), m * 3);
-          col.set(nd.role[i] === 1 ? cin : nd.role[i] === 2 ? cout : base, m * 3);
+          col.set(nd.role[i] === 1 ? cin : nd.role[i] === 2 ? cout : nd.role[i] === 3 ? cear : base, m * 3);
           m++;
         }
         const geo = new THREE.BufferGeometry();
