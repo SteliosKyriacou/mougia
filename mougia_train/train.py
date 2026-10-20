@@ -196,7 +196,14 @@ def main():
                 if len(ps) < 2:
                     continue
                 losses = []
-                for calls in ([p["call"] for p in ps], [ps[(i + 1) % len(ps)]["call"] for i in range(len(ps))]):
+                # Mismatched call from far away in the list (another exchange). Never the pair's own reply: in a
+                # duel, the next pair's call IS this pair's reply, which would leak the answer.
+                def other(i):
+                    j = (i + len(ps) // 2) % len(ps)
+                    while ps[j]["call"][1:-2] == ps[i]["reply"][:-1] or j == i:
+                        j = (j + 1) % len(ps)
+                    return ps[j]["call"]
+                for calls in ([p["call"] for p in ps], [other(i) for i in range(len(ps))]):
                     inp, tgt, mask = data.pad([c + p["reply"] for c, p in zip(calls, ps)], [len(c) for c in calls])
                     logits, _ = model(inp.to(dev), grad_ckpt=False)
                     losses.append(masked_ce(logits, tgt.to(dev), mask.to(dev)).item())

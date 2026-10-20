@@ -36,10 +36,10 @@ def overlap(a, b):
     return len(A & B) / max(1, len(A | B))
 
 
-def data_check(tok):
+def data_check(tok, data_dir):
     out = {}
     for split in ("train", "val"):
-        pairs = torch.load(os.path.join(DATA, f"pairs_{split}.pt"))
+        pairs = torch.load(os.path.join(data_dir, f"pairs_{split}.pt"))
         for style in ("duel", "cont"):
             ps = [p for p in pairs if p["style"] == style]
             calls = [tok.decode(p["call"]) for p in ps]
@@ -55,9 +55,14 @@ def data_check(tok):
 
 @torch.no_grad()
 def model_check(model, pairs, dev="cuda"):
-    rng = random.Random(0)
-    others = [p["call"] for p in pairs]
-    rng.shuffle(others)
+    n = len(pairs)
+
+    def other(i):  # a call from another exchange, never this pair's own reply (see train.py)
+        j = (i + n // 2) % n
+        while pairs[j]["call"][1:-2] == pairs[i]["reply"][:-1] or j == i:
+            j = (j + 1) % n
+        return pairs[j]["call"]
+    others = [other(i) for i in range(n)]
     res = {}
     for cond in ("true_call", "other_call", "no_call"):
         tot, n = 0.0, 0
@@ -65,7 +70,7 @@ def model_check(model, pairs, dev="cuda"):
             if cond == "true_call":
                 call = p["call"]
             elif cond == "other_call":
-                call = others[i] if others[i] is not p["call"] else others[(i + 1) % len(others)]
+                call = others[i]
             else:
                 call = [BOS] + p["call"][-2:]  # <bos> <sep> <style>
             seq = torch.tensor(call + p["reply"], device=dev)[None]
@@ -84,16 +89,17 @@ def main():
     report = {}
     for ck in ckpts:
         model, tok, meta = load_model(ck)
+        data_dir = meta["args"].get("data") or DATA
         if "data" not in report:
-            report["data"] = data_check(tok)
+            report["data"] = data_check(tok, data_dir)
             print("DATA", json.dumps(report["data"], indent=1))
-        val = torch.load(os.path.join(DATA, "pairs_val.pt"))
+        val = torch.load(os.path.join(data_dir, "pairs_val.pt"))
         r = {style: model_check(model, [p for p in val if p["style"] == style]) for style in ("duel", "cont")}
         report[ck] = r
         print(ck, json.dumps(r))
         del model
         torch.cuda.empty_cache()
-    out = os.path.join(HERE, "..", "runs", "_diagnostics_context.json")
+    out = os.environ.get("DIAG_OUT") or os.path.join(HERE, "..", "runs", "_diagnostics_context.json")
     json.dump(report, open(out, "w"), indent=1)
 
 
