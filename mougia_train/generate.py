@@ -1,5 +1,6 @@
 """Reply generation for the fly-brain poets: raw sampling, and verse mode (meter-constrained + best-of-n by rhyme)."""
 import os
+import re
 import sys
 
 import torch
@@ -33,10 +34,22 @@ def prompt_ids(tok, text, style="duel"):
     return tok.encode(text, bos=True) + [SEP, DUEL if style == "duel" else CONT]
 
 
+def _words(text):
+    return {w for w in re.findall(r"[^\W\d_]{3,}", text.lower())}
+
+
+def copy_ratio(reply, call):
+    """Share of the reply's words taken from the call (1.0 = parroting the call back)."""
+    r = _words(reply)
+    return len(r & _words(call)) / max(1, len(r))
+
+
 def rank(cand):
-    """Rhyme matters most, then meter, then sounding Cypriot, then the model's own confidence."""
+    """Rhyme matters most, then meter, then sounding Cypriot, then the model's own confidence. Replies that mostly
+    repeat the call (≥ 60% of their words) are pushed to the bottom — that isn't an answer."""
     s = cand["scores"]
-    return 3.0 * s["rhyme_ok"] + 2.0 * s["meter_ok"] + 1.0 * (s["cy_score"] >= 1.5) + 0.2 * cand["logp"]
+    return (3.0 * s["rhyme_ok"] + 2.0 * s["meter_ok"] + 1.0 * (s["cy_score"] >= 1.5) + 0.2 * cand["logp"]
+            - 10.0 * (cand.get("copy", 0.0) >= 0.6))
 
 
 def reply(model, tok, text, mode="verse", n=16, temperature=0.8, style="duel", masks=None):
@@ -50,6 +63,6 @@ def reply(model, tok, text, mode="verse", n=16, temperature=0.8, style="duel", m
     cands = []
     for s, lp in zip(seqs, lps):
         t = tok.decode(s)
-        cands.append({"reply": t, "logp": round(lp, 3), "scores": score_reply(t)})
+        cands.append({"reply": t, "logp": round(lp, 3), "scores": score_reply(t), "copy": round(copy_ratio(t, text), 2)})
     cands.sort(key=rank, reverse=True)
     return {"reply": cands[0]["reply"], "scores": cands[0]["scores"], "logp": cands[0]["logp"], "candidates": cands}

@@ -371,7 +371,42 @@ def _chat_model(model_id):
 
 
 def chat_models(q):
-    return {"models": [m for m in brain_models(q)["models"] if m["id"].startswith("ckpt:")]}
+    models = [m for m in brain_models(q)["models"] if m["id"].startswith("ckpt:")]
+    # Fine-tuned LLM baselines: LoRA adapter folders under runs/<run>/checkpoints/<tag>/
+    for _, run, cfg in reversed(run_dirs()):
+        if cfg.get("kind") != "llm_baseline":
+            continue
+        ck = os.path.join(RUNS, run, "checkpoints")
+        for tag in sorted(os.listdir(ck)) if os.path.isdir(ck) else []:
+            if os.path.exists(os.path.join(ck, tag, "adapter_config.json")):
+                models.append({"id": f"llm:{run}/{tag}", "group": cfg.get("label") or run, "graph": None, "label": tag,
+                               "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(os.path.join(ck, tag))))})
+    return {"models": models}
+
+
+def _llm_model(model_id):
+    """Base model in 4-bit + the run's LoRA adapter (needs the .venv-llm environment and ~6 GB of free GPU)."""
+    if model_id in _chat_models:
+        _chat_models.move_to_end(model_id)
+        return _chat_models[model_id]
+    import torch
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    run, tag = model_id[4:].split("/", 1)
+    cfg = read_json(os.path.join(RUNS, os.path.basename(run), "config.json")) or {}
+    base = cfg.get("args", {}).get("model")
+    tk = AutoTokenizer.from_pretrained(base)
+    if tk.pad_token is None:
+        tk.pad_token = tk.eos_token
+    m = AutoModelForCausalLM.from_pretrained(base, device_map={"": 0}, torch_dtype=torch.bfloat16,
+                                             quantization_config=BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                                                                                    bnb_4bit_compute_dtype=torch.bfloat16))
+    m = PeftModel.from_pretrained(m, os.path.join(RUNS, os.path.basename(run), "checkpoints", os.path.basename(tag))).eval()
+    for k in list(_chat_models):  # one big model at a time
+        del _chat_models[k]
+    torch.cuda.empty_cache()
+    _chat_models[model_id] = (m, tk, {"step": None, "args": {"sex": None}, "llm": True})
+    return _chat_models[model_id]
 
 
 def chat(body):
@@ -381,19 +416,24 @@ def chat(body):
     from mougia_train.generate import reply as gen_reply
     model_id = body.get("model", "")
     text = (body.get("text") or "").strip()[:400]
-    if not model_id.startswith("ckpt:") or not text:
+    if not (model_id.startswith("ckpt:") or model_id.startswith("llm:")) or not text:
         raise ValueError("pick a checkpoint and write a couplet")
     mode = body.get("mode") if body.get("mode") in ("verse", "raw") else "verse"
     style = body.get("style") if body.get("style") in ("duel", "cont") else "duel"
     temperature = min(1.5, max(0.2, float(body.get("temperature", 0.8))))
     t0 = time.time()
     with _chat_lock:
-        model, tok, ck = _chat_model(model_id)
-        out = gen_reply(model, tok, text, mode=mode, n=16, temperature=temperature, style=style)
+        if model_id.startswith("llm:"):
+            from mougia_train.llm_finetune import llm_reply
+            model, tok, ck = _llm_model(model_id)
+            out = llm_reply(model, tok, text, mode=mode, n=16, temperature=temperature, kind=style)
+        else:
+            model, tok, ck = _chat_model(model_id)
+            out = gen_reply(model, tok, text, mode=mode, n=16, temperature=temperature, style=style)
     args = ck.get("args", {})
     return {"reply": out["reply"], "scores": out["scores"], "logp": out["logp"], "candidates": out["candidates"][:6],
             "mode": mode, "style": style, "temperature": temperature, "step": ck.get("step"),
-            "poet": POET.get(args.get("sex"), "?"), "seconds": round(time.time() - t0, 2)}
+            "poet": "Krikri-8B" if ck.get("llm") else POET.get(args.get("sex"), "?"), "seconds": round(time.time() - t0, 2)}
 
 
 POST_ROUTES = {"/api/chat": chat}

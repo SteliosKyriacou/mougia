@@ -8,3 +8,5 @@ data/processed/
 data/connectomes/
 runs/*/checkpoints/
 *.log
+.venv-llm/
+models/
