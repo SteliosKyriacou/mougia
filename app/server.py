@@ -349,6 +349,24 @@ import threading
 
 _chat_lock = threading.Lock()
 _chat_models = collections.OrderedDict()
+_chat_last_used = [0.0]
+CHAT_IDLE_UNLOAD_S = 600  # free the GPU for training when nobody has chatted for 10 minutes
+
+
+def _chat_janitor():
+    while True:
+        time.sleep(60)
+        if _chat_models and time.time() - _chat_last_used[0] > CHAT_IDLE_UNLOAD_S:
+            with _chat_lock:
+                _chat_models.clear()
+                try:
+                    import torch
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+
+threading.Thread(target=_chat_janitor, daemon=True).start()
 
 
 def _chat_model(model_id):
@@ -422,6 +440,7 @@ def chat(body):
     style = body.get("style") if body.get("style") in ("duel", "cont") else "duel"
     temperature = min(1.5, max(0.2, float(body.get("temperature", 0.8))))
     t0 = time.time()
+    _chat_last_used[0] = t0
     with _chat_lock:
         if model_id.startswith("llm:"):
             from mougia_train.llm_finetune import llm_reply
