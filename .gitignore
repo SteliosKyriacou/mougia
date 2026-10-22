@@ -10,3 +10,4 @@ runs/*/checkpoints/
 *.log
 .venv-llm/
 models/
+third_party/
