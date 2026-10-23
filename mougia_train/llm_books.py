@@ -60,6 +60,9 @@ def parse():
     ap.add_argument("--sample-every-min", type=float, default=15)
     ap.add_argument("--eval-replies", type=int, default=16)
     ap.add_argument("--patience", type=int, default=3)
+    ap.add_argument("--eval-every-steps", type=int, default=0, help="also evaluate every N optimizer steps (0 = time only)")
+    ap.add_argument("--init-adapter", default=None, help="start from this LoRA adapter folder (e.g. a run's best-books)")
+    ap.add_argument("--stages", default="books,battles", help="which stages to run, e.g. 'battles'")
     ap.add_argument("--log-every", type=int, default=5)
     return ap.parse_args()
 
@@ -102,9 +105,14 @@ def main():
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model = get_peft_model(model, LoraConfig(r=a.lora_r, lora_alpha=a.lora_alpha, lora_dropout=a.lora_dropout, task_type="CAUSAL_LM",
                                              target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]))
+    if a.init_adapter:  # continue from an earlier run's adapter
+        from peft import set_peft_model_state_dict
+        from safetensors.torch import load_file
+        set_peft_model_state_dict(model, load_file(os.path.join(a.init_adapter, "adapter_model.safetensors")))
     stats = json.load(open(os.path.join(a.books, "stats.json")))
     log = RunLogger(a.run_id, {
-        "label": "Krikri-8B · books only (Cypriot LM → book battles)", "poet": "Krikri-8B", "kind": "llm_baseline",
+        "label": "Krikri-8B · books only (Cypriot LM → book battles)" if not a.init_adapter else
+                 f"Krikri-8B · books only · {a.stages} continued from {os.path.basename(os.path.dirname(os.path.dirname(a.init_adapter)))}/{os.path.basename(a.init_adapter)}", "poet": "Krikri-8B", "kind": "llm_baseline",
         "args": vars(a), "model": os.path.basename(a.model), "data_dir": a.books, "data": stats,
         "params": {"trainable": sum(p.numel() for p in model.parameters() if p.requires_grad)},
         "note": "losses are nats per syllable; smg_rate = share of replies with Standard-Greek forms",
@@ -185,10 +193,13 @@ def main():
 
     step, last_eval = 0, -1e18
     try:
+        stages = [x.strip() for x in a.stages.split(",")]
         with log.sampling():
-            log.eval(0, "books", **evaluate("books"))
-            sample("books", 0)
+            log.eval(0, stages[0], **evaluate(stages[0]))
+            sample(stages[0], 0)
         for stage, lr, epochs, pool in (("books", a.lr_books, a.epochs_books, "chunks"), ("battles", a.lr_battles, a.epochs_battles, "pairs")):
+            if stage not in stages:
+                continue
             items = book_chunks if pool == "chunks" else bat_items
             total = max(1, int(math.ceil(len(items) / (a.micro_batch * a.grad_accum)) * epochs))
             opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr, weight_decay=0.0)
@@ -227,7 +238,7 @@ def main():
                                 tokens_per_s=tok_last / max(time.time() - t_last, 1e-6),
                                 gpu_mem_gb=torch.cuda.max_memory_allocated() / 1e9, phase_progress=(step - s0) / total)
                     t_last, tok_last = time.time(), 0
-                if log.elapsed() - last_eval >= a.eval_every_min * 60:
+                if log.elapsed() - last_eval >= a.eval_every_min * 60 or (a.eval_every_steps and (step - s0) % a.eval_every_steps == 0):
                     with log.sampling():
                         res = evaluate(stage)
                         log.eval(step, stage, **res)
