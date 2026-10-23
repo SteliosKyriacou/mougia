@@ -138,7 +138,7 @@ def canvas_nll(model, ids, attn, pos, P, noisy, mask_id):
     rows, cols = torch.nonzero(noisy, as_tuple=True)
     if rows.numel() == 0:
         return torch.zeros(ids.shape[0], device=ids.device, dtype=torch.float32) + 0.0 * h.sum()
-    logits = m.lm_head(h[rows, (P + cols - 1).clamp_min(0)]).float()
+    logits = m.lm_head(h[rows, (P + cols - 1).clamp_min(0)].to(m.lm_head.weight.dtype)).float()
     ce = F.cross_entropy(logits, ids[rows, P + cols], reduction="none")
     return torch.zeros(ids.shape[0], device=ids.device, dtype=ce.dtype).index_add(0, rows, ce)
 
