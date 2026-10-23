@@ -360,7 +360,9 @@ def _chat_janitor():
             with _chat_lock:
                 _chat_models.clear()
                 try:
+                    import gc
                     import torch
+                    gc.collect()  # model objects hold reference cycles; collect them so the GPU memory is really freed
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
@@ -422,6 +424,8 @@ def _llm_model(model_id):
     m = PeftModel.from_pretrained(m, os.path.join(RUNS, os.path.basename(run), "checkpoints", os.path.basename(tag))).eval()
     for k in list(_chat_models):  # one big model at a time
         del _chat_models[k]
+    import gc
+    gc.collect()
     torch.cuda.empty_cache()
     _chat_models[model_id] = (m, tk, {"step": None, "args": {"sex": None}, "llm": True})
     return _chat_models[model_id]

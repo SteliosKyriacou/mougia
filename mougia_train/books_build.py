@@ -24,6 +24,11 @@ from mougia_train.books_prepare import normalize  # noqa: E402
 D = os.path.join(HERE, "..", "data", "processed", "books_v1")
 VAL_FRAC = 0.10
 MAX_TURN_LINES = 16
+# Non-verse lines found while annotating (Wikisource maintenance notices, newspaper masthead, editorial prose,
+# a stanza duplicated from another poem): left out of the stage-1 text.
+EXCLUDE_LINES = {"wiki-η-9η-ιουλίου-του-1821": [(0, 62)], "wiki-τα-προξενεία-της-αφροδίτης": [(0, 11), (48, 56)]}
+# Chronicles with only one or two real exchanges (annotator's advice): kept for stage 1, not used as battles.
+NOT_BATTLES = {"sak-song-25", "sak-song-32-b", "sak-song-33"}
 
 
 def is_val(pid):
@@ -56,9 +61,11 @@ def main():
         if dialect != "cypriot":
             continue  # Cypriot only (Standard-Greek and mixed poems are left out)
         split = "val" if is_val(pid) else "train"
-        stage1[split].append({"poem_id": pid, "source": p["source"], "title": p.get("title"), "text": "\n".join(p["lines"])})
-        stats[f"stage1_{split}_lines"] += len(p["lines"])
-        if not (a and a.get("is_dialogue")):
+        drop = {i for lo, hi in EXCLUDE_LINES.get(pid, []) for i in range(lo, hi + 1)}
+        keep = [l for i, l in enumerate(p["lines"]) if i not in drop]
+        stage1[split].append({"poem_id": pid, "source": p["source"], "title": p.get("title"), "text": "\n".join(keep)})
+        stats[f"stage1_{split}_lines"] += len(keep)
+        if not (a and a.get("is_dialogue")) or pid in NOT_BATTLES:
             continue
         stats["dialogue_poems"] += 1
         speeches = [t for t in a["turns"] if t["kind"] == "speech"]
