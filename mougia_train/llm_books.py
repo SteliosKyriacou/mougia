@@ -52,6 +52,7 @@ def parse():
     ap.add_argument("--epochs-books", type=float, default=3.0)
     ap.add_argument("--epochs-battles", type=float, default=4.0)
     ap.add_argument("--micro-batch", type=int, default=4)
+    ap.add_argument("--micro-batch-books", type=int, default=2, help="stage 1 scores every token, so smaller micro-batches")
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--max-len", type=int, default=384)
     ap.add_argument("--warmup", type=int, default=30)
@@ -200,9 +201,11 @@ def main():
                     g["lr"] = lr * min(1.0, (k + 1) / a.warmup) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * k / total)))
                 opt.zero_grad(set_to_none=True)
                 loss_acc = 0.0
-                for _ in range(a.grad_accum):
+                mb = a.micro_batch_books if pool == "chunks" else a.micro_batch
+                accum = a.grad_accum * a.micro_batch // mb  # same effective batch in both stages
+                for _ in range(accum):
                     batch = []
-                    for _ in range(a.micro_batch):
+                    for _ in range(mb):
                         if pos >= len(order):
                             random.shuffle(order)
                             pos = 0
@@ -212,8 +215,8 @@ def main():
                     inp, mask, att = collate(batch, tk.pad_token_id)
                     s, n = masked_nll(model, inp.cuda(), mask.cuda(), att.cuda())
                     loss = s.sum() / n.sum().clamp_min(1)
-                    (loss / a.grad_accum).backward()
-                    loss_acc += loss.item() / a.grad_accum
+                    (loss / accum).backward()
+                    loss_acc += loss.item() / accum
                     tok_last += int(att.sum())
                 gn = torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
                 opt.step()

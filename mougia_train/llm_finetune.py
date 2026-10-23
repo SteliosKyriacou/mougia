@@ -127,7 +127,10 @@ def masked_nll(model, inp, mask, att):
     tgt = inp[:, 1:]
     m = mask[:, 1:]
     rows = torch.nonzero(m)[:, 0]
-    nll = F.cross_entropy(logits[m].float(), tgt[m], reduction="none")
+    sel_logits, sel_tgt = logits[m], tgt[m]
+    # float32 cross-entropy in slices, so a long fully-scored text never needs all its fp32 logits at once
+    nll = torch.cat([F.cross_entropy(sel_logits[i:i + 512].float(), sel_tgt[i:i + 512], reduction="none")
+                     for i in range(0, len(sel_tgt), 512)]) if len(sel_tgt) else sel_logits.new_zeros(0, dtype=torch.float32)
     per_row = torch.zeros(inp.shape[0], device=inp.device, dtype=nll.dtype).index_add(0, rows, nll)
     return per_row, m.sum(1)
 
