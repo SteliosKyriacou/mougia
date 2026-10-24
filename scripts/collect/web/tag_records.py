@@ -1,4 +1,4 @@
-"""Add category / category_norm / dialect / poet to every record in data/raw/web_*/extracted.jsonl (idempotent).
+"""Add category / category_norm / dialect / poet to every record in data/old/raw/web_*/extracted.jsonl (idempotent).
 category      : the site's own label/tag/section (string; joined labels)
 category_norm : tsiattista | distichs | poiitarika | folk_song | lyrics | modern_poetry | ancient | prose_other | unlabeled
 dialect       : cypriot | smg | ancient | unknown (heuristic, see common.dialect_of)

@@ -1,4 +1,4 @@
-"""Mougia dataset browser: a small stdlib HTTP server over data/processed/{records,couplets,pairs}.jsonl.
+"""Mougia dataset browser: a small stdlib HTTP server over data/old/processed/{records,couplets,pairs}.jsonl.
 
 Run:  python3 app/server.py [--port 8765]   then open http://127.0.0.1:8765
 """
@@ -13,7 +13,7 @@ import unicodedata
 import urllib.parse
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(ROOT, "..", "data", "processed")
+DATA = os.path.join(ROOT, "..", "data", "old", "processed")
 STATIC = os.path.join(ROOT, "static")
 
 GROUPS = (("web_", "Web"), ("book_", "Books"), ("corpus_", "Corpora"), ("youtube", "YouTube"))
@@ -218,7 +218,7 @@ def run_samples(q):
 
 
 # ---------- Brain viewer: neurons + weighted edges from raw connectomes or training checkpoints ----------
-GRAPHS = os.path.join(ROOT, "..", "data", "connectomes", "processed")
+GRAPHS = os.path.join(ROOT, "..", "data", "old", "connectomes", "processed")
 POET = {"female": "Kyriakou", "male": "Markos"}
 SUPERCLASS_GROUPS = [  # (label, female names, male names) — display grouping shared by both sexes
     ("Optic lobe", {"optic"}, {"ol_intrinsic"}),
@@ -443,6 +443,10 @@ def chat(body):
     mode = body.get("mode") if body.get("mode") in ("verse", "raw") else "verse"
     style = body.get("style") if body.get("style") in ("duel", "cont") else "duel"
     temperature = min(1.5, max(0.2, float(body.get("temperature", 0.8))))
+    for _, run, cfg in run_dirs():  # never load a chat model on top of a GPU training run (it would crash the run)
+        st = read_json(os.path.join(RUNS, run, "status.json")) or {}
+        if st.get("state") == "running":
+            raise ValueError(f"The GPU is busy training “{cfg.get('label') or run}”. Chat is paused until it finishes.")
     t0 = time.time()
     _chat_last_used[0] = t0
     with _chat_lock:

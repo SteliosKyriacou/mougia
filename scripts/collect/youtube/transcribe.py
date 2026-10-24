@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / "data/raw/youtube"
+OUT = ROOT / "data/old/raw/youtube"
 AUDIO = OUT / "audio_tmp"
 TR = OUT / "transcripts"
 BIN = ROOT / ".venv/bin"

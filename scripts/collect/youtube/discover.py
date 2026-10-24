@@ -1,7 +1,7 @@
 """Discover tsiattista videos on YouTube via yt-dlp flat searches.
 
-Writes data/raw/youtube/search_raw/<query-slug>.json (flat -J output) and
-data/raw/youtube/catalog.jsonl (deduplicated, with relevance flag).
+Writes data/old/raw/youtube/search_raw/<query-slug>.json (flat -J output) and
+data/old/raw/youtube/catalog.jsonl (deduplicated, with relevance flag).
 
 Usage: .venv/bin/python -I scripts/collect/youtube/discover.py [--n 200]
 """
@@ -9,7 +9,7 @@ import argparse, hashlib, json, re, subprocess, sys, unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / "data/raw/youtube"
+OUT = ROOT / "data/old/raw/youtube"
 YTDLP = str(ROOT / ".venv/bin/yt-dlp")
 
 QUERIES = [

@@ -1,6 +1,6 @@
 """Turn the raw connectome tables into brain-only graphs for Kyriakou (female, FlyWire 783) and Markos (male CNS v1.0).
 
-Output: data/connectomes/processed/{female,male}_{full,central}.pt, each a dict with
+Output: data/old/connectomes/processed/{female,male}_{full,central}.pt, each a dict with
   n                 number of neurons
   pre, post         int64 edge lists (neuron indices), one edge per connected pair with >= MIN_SYN synapses
   syn               float32 synapse counts per edge
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "connectomes")
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "old", "connectomes")
 OUT = os.path.join(ROOT, "processed")
 MIN_SYN = 5  # FlyWire's standard threshold for a reliable connection
 INHIBITORY = {"gaba", "glutamate", "histamine"}  # glutamate acts mainly via GluCl (inhibitory) in the fly CNS

@@ -23,7 +23,7 @@ positions) / number of syllable tokens of the target text, estimated with K stra
 numbers for the context-gain pair). They are upper bounds on the true NLL, so they are conservative against MDLM.
 
 Run with the LLM venv:
-  .venv-llm/bin/python -I mougia_train/mdlm_train.py --run-id mdlm-v3 --data data/processed/train_v3 --max-hours 4
+  .venv-llm/bin/python -I mougia_train/mdlm_train.py --run-id mdlm-v3 --data data/old/processed/train_v3 --max-hours 4
 """
 import argparse
 import json
@@ -46,13 +46,13 @@ from mougia_train.generate import copy_ratio, prompt_ids, rank, score_reply, ver
 from mougia_train.runlog import RunLogger  # noqa: E402
 from mougia_train.tokenizer import BOS, CONT, DUEL, EOS, NL, PAD, SEP, UNK, Tokenizer  # noqa: E402
 
-DATA = os.path.join(ROOT, "data", "processed", "train_v3")
+DATA = os.path.join(ROOT, "data", "old", "processed", "train_v3")
 
 
 def parse():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-id", default="mdlm-v3")
-    ap.add_argument("--data", default=None, help="training-data folder from prepare.py (default data/processed/train_v3)")
+    ap.add_argument("--data", default=None, help="training-data folder from prepare.py (default data/old/processed/train_v3)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--layers", type=int, default=12)
     ap.add_argument("--d-model", type=int, default=640)

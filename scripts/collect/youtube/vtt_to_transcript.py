@@ -7,7 +7,7 @@ import json, re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / "data/raw/youtube"
+OUT = ROOT / "data/old/raw/youtube"
 TS = re.compile(r"(\d+):(\d+):(\d+\.\d+)")
 
 

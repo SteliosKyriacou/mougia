@@ -1,6 +1,6 @@
 """Extract couplets from descriptions, comments and subtitle files in meta/.
 
-Writes data/raw/youtube/extracted_text.jsonl (merged later into extracted.jsonl).
+Writes data/old/raw/youtube/extracted_text.jsonl (merged later into extracted.jsonl).
 Usage: .venv/bin/python -I scripts/collect/youtube/extract_text.py
 """
 import json, re, sys
@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from greek_verse import score_pair, greek_ratio, strip_acc  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / "data/raw/youtube"
+OUT = ROOT / "data/old/raw/youtube"
 META = OUT / "meta"
 
 CREDIT = re.compile(r"^\S+(\s\S+)?\s*:")  # "Βκιολίν: ...", "Γενική επιμέλεια: ..."

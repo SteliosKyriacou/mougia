@@ -9,7 +9,7 @@ Heuristics (sung tsiattista over violin/lute):
   * short fragments are merged until ~12+ syllables to form lines.
   * inside each turn the best consecutive line pair (metre 12-18 + rhyme)
     is the couplet; no rhyming pair -> last two lines, low confidence.
-Writes data/raw/youtube/extracted_whisper.jsonl and turns/<id>.json.
+Writes data/old/raw/youtube/extracted_whisper.jsonl and turns/<id>.json.
 """
 import argparse, json, re, sys
 from pathlib import Path
@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from greek_verse import score_pair, syllables, strip_acc  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / "data/raw/youtube"
+OUT = ROOT / "data/old/raw/youtube"
 TR = OUT / "transcripts"
 
 FILLER = re.compile(r"^(?:(?:ε+|εμ+|μμ+|ελ|α+ι*|αι|ρε|ε ρε|ναι|ωχ|ω+|α|ου+|αμαν)(?:[\s,!.…]+|$))+", re.I)

@@ -11,7 +11,7 @@ run() {
   local id=$1; shift
   if grep -qs '"finished"' "runs/$id/status.json"; then echo "skip $id (finished)"; return; fi
   echo "$(date '+%F %T') start $id"
-  python3 -I -W ignore mougia_train/train.py --run-id "$id" --data data/processed/train_v3 --batch 64 "$@" > "runs/_logs/$id.log" 2>&1
+  python3 -I -W ignore mougia_train/train.py --run-id "$id" --data data/old/processed/train_v3 --batch 64 "$@" > "runs/_logs/$id.log" 2>&1
   echo "$(date '+%F %T') end $id ($(cat runs/$id/status.json 2>/dev/null))"
 }
 

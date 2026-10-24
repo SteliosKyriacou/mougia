@@ -1,4 +1,4 @@
-"""Merge data/raw/*/extracted.jsonl into data/processed/{couplets,pairs}.jsonl with meter/rhyme checks and dedup."""
+"""Merge data/old/raw/*/extracted.jsonl into data/old/processed/{couplets,pairs}.jsonl with meter/rhyme checks and dedup."""
 import collections
 import glob
 import json

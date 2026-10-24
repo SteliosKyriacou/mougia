@@ -11,3 +11,4 @@ runs/*/checkpoints/
 .venv-llm/
 models/
 third_party/
+data/old/

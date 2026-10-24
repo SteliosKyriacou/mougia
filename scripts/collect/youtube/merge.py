@@ -1,10 +1,10 @@
 """Merge extracted_text.jsonl + extracted_whisper.jsonl (+ extracted_ytasr.jsonl)
-into data/raw/youtube/extracted.jsonl and print a summary."""
+into data/old/raw/youtube/extracted.jsonl and print a summary."""
 import json
 from collections import Counter
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parents[3] / "data/raw/youtube"
+OUT = Path(__file__).resolve().parents[3] / "data/old/raw/youtube"
 recs = []
 for name in ["extracted_text.jsonl", "extracted_whisper.jsonl", "extracted_subtitle.jsonl"]:
     p = OUT / name

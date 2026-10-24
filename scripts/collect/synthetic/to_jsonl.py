@@ -1,11 +1,11 @@
-"""Convert the synthetic duel parts (data/raw/synthetic_duels/part_*.jsonl) into extracted.jsonl records for
+"""Convert the synthetic duel parts (data/old/raw/synthetic_duels/part_*.jsonl) into extracted.jsonl records for
 scripts/build_dataset.py: one record per turn, in order, each replying to the previous turn of its duel.
 Every record is marked synthetic so it stays distinguishable from real collected verse."""
 import glob
 import json
 import os
 
-D = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "data", "raw", "synthetic_duels")
+D = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "data", "old", "raw", "synthetic_duels")
 out, duels = [], 0
 for path in sorted(glob.glob(os.path.join(D, "part_*.jsonl"))):
     for line in open(path, encoding="utf-8"):

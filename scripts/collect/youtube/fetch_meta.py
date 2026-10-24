@@ -1,7 +1,7 @@
 """Fetch full info json (description, subtitles list), subtitles and top comments
 for relevant catalog entries. No media download.
 
-Writes data/raw/youtube/meta/<id>.info.json, <id>.*.vtt, and a compact
+Writes data/old/raw/youtube/meta/<id>.info.json, <id>.*.vtt, and a compact
 <id>.comments.json (text/author/likes only).
 
 Usage: .venv/bin/python -I scripts/collect/youtube/fetch_meta.py [--limit N] [--max-comments 100]
@@ -10,7 +10,7 @@ import argparse, json, re, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / "data/raw/youtube"
+OUT = ROOT / "data/old/raw/youtube"
 META = OUT / "meta"
 YTDLP = str(ROOT / ".venv/bin/yt-dlp")
 

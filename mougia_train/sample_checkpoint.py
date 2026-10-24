@@ -26,6 +26,8 @@ def load_model(ckpt_path, device="cuda"):
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     a = ck["args"]
     data_dir = a.get("data") or DATA  # checkpoints remember which training-data folder (and tokenizer) they used
+    if not os.path.isdir(data_dir):  # data/ was moved to data/old/ on 2026-10-24
+        data_dir = data_dir.replace("data/processed", "data/old/processed")
     tok = Tokenizer.load(os.path.join(data_dir, "tokenizer.json"))
     graph = load_graph(os.path.join(GRAPHS, f"{a['sex']}_{a['region']}.pt"), wiring=a["wiring"], max_edges=a.get("max_edges") or None, seed=a["seed"])
     model = FlyBrainLM(graph, len(tok), d_model=a["d_model"], ticks=a["ticks"], alpha=a["alpha"],

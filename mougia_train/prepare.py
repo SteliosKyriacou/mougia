@@ -1,6 +1,6 @@
 """Build tokenized training data for the fly-brain poets.
 
-Writes data/processed/train/:
+Writes data/old/processed/train/:
   tokenizer.json   syllable vocabulary
   lm_train.pt / lm_val.pt          flat token streams of Cypriot dialect text (pretraining)
   couplets_train.pt / couplets_val.pt   lists of token-id lists "<bos> line1 <nl> line2 <eos>"
@@ -28,8 +28,8 @@ sys.path.insert(0, ROOT)
 from greek_meter import dedupe_key  # noqa: E402
 from mougia_train.tokenizer import CONT, DUEL, SEP, Tokenizer  # noqa: E402
 
-RAW = os.path.join(ROOT, "data", "raw")
-PROC = os.path.join(ROOT, "data", "processed")
+RAW = os.path.join(ROOT, "data", "old", "raw")
+PROC = os.path.join(ROOT, "data", "old", "processed")
 OUT = os.path.join(PROC, "train")
 LM_SOURCES = [
     "corpus_grdd_plus/repo/data/final_cypriot.txt",
@@ -49,7 +49,7 @@ def main():
     global OUT
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=OUT, help="output folder (default data/processed/train)")
+    ap.add_argument("--out", default=OUT, help="output folder (default data/old/processed/train)")
     OUT = os.path.abspath(ap.parse_args().out)
     os.makedirs(OUT, exist_ok=True)
     couplets = [json.loads(l) for l in open(os.path.join(PROC, "couplets.jsonl"), encoding="utf-8")]
@@ -68,7 +68,7 @@ def main():
     #   cont — the next couplet of the same song / poem / thread, kept only when it is metrical and rhymes
     #          (teaches answering a couplet in context with meter + rhyme)
     # Clean duel set: both sides must be proper verse (meter + rhyme) and Cypriot. Real written duels weigh most;
-    # synthetic duels (data/raw/synthetic_duels) are flagged so their share can be set at training time.
+    # synthetic duels (data/old/raw/synthetic_duels) are flagged so their share can be set at training time.
     clean = lambda cid: strict(cid) and by_id[cid]["cy_score"] >= 1.5
     pairs, seen_pairs, dropped_duels = [], set(), 0
     for p in duel_pairs:

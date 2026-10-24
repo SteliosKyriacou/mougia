@@ -1,6 +1,6 @@
 """Books-only dataset, step 1: split every book source into poems with numbered, normalised lines.
 
-Writes data/processed/books_v1/poems.jsonl — one record per poem:
+Writes data/old/processed/books_v1/poems.jsonl — one record per poem:
   {poem_id, source, title, author, lines: [normalised verse lines], original: [lines as printed]}
 Normalisation (so Krikri learns *Cypriot*, not 19th-century Greek spelling):
   - polytonic → monotonic (breathings / iota subscript dropped, grave & circumflex → acute), ϐ → β;
@@ -8,7 +8,7 @@ Normalisation (so Krikri learns *Cypriot*, not 19th-century Greek spelling):
   - the original printed lines are kept alongside.
 Sources handled here: Sakellarios 1891 (78 folk songs + 457 distichs), Cypriot Wikisource poems (Michaelides,
 Lipertis, …), Orthodox Herald couplets. Mixed prose/verse books (school anthology, Ττερλίκκας booklet, thesis) are
-extracted by hand-checked annotation into data/processed/books_v1/extra_poems.jsonl and merged by books_build.py.
+extracted by hand-checked annotation into data/old/processed/books_v1/extra_poems.jsonl and merged by books_build.py.
 """
 import glob
 import json
@@ -18,10 +18,10 @@ import sys
 import unicodedata
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-RAW = os.path.join(ROOT, "data", "raw")
+RAW = os.path.join(ROOT, "data", "old", "raw")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 from greek_meter import nuclei  # noqa: E402  (synizesis-aware syllables: γιά, μιά are one syllable)
-OUT = os.path.join(ROOT, "data", "processed", "books_v1")
+OUT = os.path.join(ROOT, "data", "old", "processed", "books_v1")
 
 CONJ = re.compile(r"(?<![^\W\d_])(καί|και|κή|κη|κι|κί)(?![^\W\d_])", re.IGNORECASE)
 

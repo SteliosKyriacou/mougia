@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", ".."))
 from check_couplets import check  # noqa: E402
 
-D = os.path.join(HERE, "..", "..", "..", "data", "raw", "synthetic_duels")
+D = os.path.join(HERE, "..", "..", "..", "data", "old", "raw", "synthetic_duels")
 AUTO = {"πιο": "πκιο", "ήταν": "ήτουν", "εσένα": "εσέναν", "εμένα": "εμέναν", "έχω": "έσιω", "έχεις": "έσιεις",
         "έχει": "έσιει", "έχουμε": "έσιουμεν", "έχουμεν": "έσιουμεν", "έχετε": "έσιετε", "έχουν": "έσιουν",
         "τίποτα": "τίποτε", "σήμερα": "σήμερον"}

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Re-run all web extractors (uses cached raw pages in data/raw/web_*/html) and tag records.
+# Re-run all web extractors (uses cached raw pages in data/old/raw/web_*/html) and tag records.
 cd "$(dirname "$0")"
 python3 -I tsiatista_wordpress.py
 python3 -I blogger.py kupriakatsiatismata.blogspot.com kupriakatsiatismata couplets

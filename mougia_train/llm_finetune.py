@@ -1,7 +1,7 @@
 """Fine-tune a pretrained Greek LLM (default: ILSP Llama-Krikri-8B-Instruct v1.5) on the same data as the fly brains.
 
 Comparison baseline for the paper:
-  - exactly the same training split as the fly runs (data/processed/train_v3: call→reply pairs, couplets,
+  - exactly the same training split as the fly runs (data/old/processed/train_v3: call→reply pairs, couplets,
     Cypriot dialect text), decoded from the fly tokenizer so nothing differs but the model;
   - chat format: the rival's couplet is the user turn, the reply couplet is the assistant turn (loss on the reply);
     couplets become "finish the couplet" (line 1 → line 2); dialect text is plain continued pretraining (30%);
@@ -41,7 +41,7 @@ ASK = {"duel": "Απάντησε στο τσιαττιστό:\n{call}", "cont": 
 def parse():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "Llama-Krikri-8B-Instruct-v1.5"))
-    ap.add_argument("--data", default=os.path.join(ROOT, "data", "processed", "train_v3"))
+    ap.add_argument("--data", default=os.path.join(ROOT, "data", "old", "processed", "train_v3"))
     ap.add_argument("--run-id", default="llm-krikri-8b")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lora-r", type=int, default=16)

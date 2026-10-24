@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-POEMS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "processed", "books_v1", "poems.jsonl")
+POEMS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "old", "processed", "books_v1", "poems.jsonl")
 
 
 def load():

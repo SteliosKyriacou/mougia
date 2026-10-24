@@ -1,4 +1,4 @@
-"""Write SOURCE.md for every data/raw/web_<site>/ directory (counts computed from extracted.jsonl)."""
+"""Write SOURCE.md for every data/old/raw/web_<site>/ directory (counts computed from extracted.jsonl)."""
 import os, json, glob, sys, datetime
 from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -22,7 +22,7 @@ run() {  # run <id> <script> <args...>
   log "$id: $(state "$id")"
 }
 
-run mdlm-v3 mdlm_train.py --data data/processed/train_v3 --pretrain-tokens 200e6 --max-hours 4
+run mdlm-v3 mdlm_train.py --data data/old/processed/train_v3 --pretrain-tokens 200e6 --max-hours 4
 run ncm-v3 ncm_train.py --max-hours 5
 
 while alive dream_finetune.py dream-7b; do sleep 60; done

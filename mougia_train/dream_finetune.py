@@ -1,7 +1,7 @@
 """Fine-tune the pretrained diffusion LLM Dream-7B (Dream-org/Dream-v0-Instruct-7B) on the same data as the fly brains.
 
 Diffusion counterpart of llm_finetune.py (Krikri-8B, autoregressive). Everything that can be the same is the same:
-  - exactly the same examples (llm_finetune.load_examples on data/processed/train_v3: call→reply pairs, couplets as
+  - exactly the same examples (llm_finetune.load_examples on data/old/processed/train_v3: call→reply pairs, couplets as
     line 1 → line 2, 30% Cypriot dialect text replay), same SYSTEM / ASK prompts in Dream's (Qwen) chat template;
   - 4-bit QLoRA (nf4, bf16 compute), LoRA r=16 on all attention + MLP projections, gradient checkpointing;
   - same optimizer, schedule, early stopping and best adapter by val duel loss; same RunLogger logs, evaluation keys,
@@ -56,7 +56,7 @@ ELBO_SAMPLES = 4   # t values per example for the validation ELBO
 def parse():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "Dream-v0-Instruct-7B"))
-    ap.add_argument("--data", default=os.path.join(ROOT, "data", "processed", "train_v3"))
+    ap.add_argument("--data", default=os.path.join(ROOT, "data", "old", "processed", "train_v3"))
     ap.add_argument("--run-id", default="dream-7b")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lora-r", type=int, default=16)

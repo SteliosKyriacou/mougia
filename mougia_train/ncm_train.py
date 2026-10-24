@@ -3,7 +3,7 @@ coarse → fine, as a hierarchy of discrete "concept" codes (Kumbong et al., "Ne
 Coarse-to-Fine Text Generation", arXiv 2610.14162; model code from third_party/ncm, MIT, which ships no trainer).
 
 How NCM is mapped onto call → reply:
-  - pre-tokenizer: OUR syllable tokenizer (data/processed/train_v3/tokenizer.json), not their English BPE;
+  - pre-tokenizer: OUR syllable tokenizer (data/old/processed/train_v3/tokenizer.json), not their English BPE;
   - target: one reply couplet = 48 syllable tokens (…<nl>…<eos>, right-padded with <pad>), like their XSum setup
     (L = 48, 9 levels of 4, 6, 10, 14, 20, 26, 32, 40, 48 codes);
   - condition: the rival's call (<bos> … <sep><duel|cont>, ≤ 64 tokens) is a raw-token prefix — embedded with the
@@ -67,7 +67,7 @@ NULL_PREFIX = [SEP]
 def parse():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-id", default="ncm-v3")
-    ap.add_argument("--data", default=os.path.join(ROOT, "data", "processed", "train_v3"))
+    ap.add_argument("--data", default=os.path.join(ROOT, "data", "old", "processed", "train_v3"))
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prefix-len", type=int, default=64, help="call tokens (longest call in v3 is 64)")
     # stage 1: tokenizer (their XSum tokenizer config; batch/steps scaled to one GPU)

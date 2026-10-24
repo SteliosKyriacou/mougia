@@ -1,6 +1,6 @@
 """Extract couplets from individual article/blog pages.
 usage: python3 -I pages.py LISTFILE      (lines: SITE URL [css-selector])
-Writes data/raw/web_<SITE>/extracted.jsonl per site (all URLs of that site together)."""
+Writes data/old/raw/web_<SITE>/extracted.jsonl per site (all URLs of that site together)."""
 import sys, os, json
 from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

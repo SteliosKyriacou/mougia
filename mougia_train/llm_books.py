@@ -5,7 +5,7 @@
   stage 2 "battles" — supervised call→reply on the battles reconstructed from those poems (speaker turns annotated by
                       hand): whole speeches and the couplet at each turn boundary → learn the question–reply structure
 
-Data: data/processed/books_v1/ (books_prepare.py → annotation → books_build.py). Starts from the original
+Data: data/old/processed/books_v1/ (books_prepare.py → annotation → books_build.py). Starts from the original
 Krikri-8B-Instruct, not from the earlier fine-tune, so the result depends on the books alone.
 Evaluation (logged per stage, same keys as the other runs): per-syllable val loss on held-out book poems (stage 1) and
 on held-out book battles (stage 2), context gain, verse/raw reply quality and the share of replies that leak
@@ -34,14 +34,14 @@ from mougia_train.llm_finetune import chat_ids, collate, llm_reply, load_example
 from mougia_train.runlog import RunLogger  # noqa: E402
 from mougia_train.tokenizer import Tokenizer  # noqa: E402
 
-BOOKS = os.path.join(ROOT, "data", "processed", "books_v1")
+BOOKS = os.path.join(ROOT, "data", "old", "processed", "books_v1")
 
 
 def parse():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(ROOT, "models", "Llama-Krikri-8B-Instruct-v1.5"))
     ap.add_argument("--books", default=BOOKS)
-    ap.add_argument("--v3", default=os.path.join(ROOT, "data", "processed", "train_v3"), help="for the v3 duel-call comparison")
+    ap.add_argument("--v3", default=os.path.join(ROOT, "data", "old", "processed", "train_v3"), help="for the v3 duel-call comparison")
     ap.add_argument("--run-id", default="krikri-books")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lora-r", type=int, default=16)

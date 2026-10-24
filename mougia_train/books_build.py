@@ -1,6 +1,6 @@
 """Books-only dataset, step 2: merge poem annotations into training data for the two-stage Krikri fine-tune.
 
-Inputs (data/processed/books_v1/): poems.jsonl (books_prepare.py), extra_poems.jsonl (verse extracted from the mixed
+Inputs (data/old/processed/books_v1/): poems.jsonl (books_prepare.py), extra_poems.jsonl (verse extracted from the mixed
 books), annot/*.jsonl (per-poem dialect + speaker turns, read and annotated by hand).
 Outputs:
   stage1_{train,val}.jsonl  {"poem_id", "source", "title", "text"} — every Cypriot-dialect poem (and distich), one doc each
@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 from mougia_train.books_prepare import normalize  # noqa: E402
 
-D = os.path.join(HERE, "..", "data", "processed", "books_v1")
+D = os.path.join(HERE, "..", "data", "old", "processed", "books_v1")
 VAL_FRAC = 0.10
 MAX_TURN_LINES = 16
 # Non-verse lines found while annotating (Wikisource maintenance notices, newspaper masthead, editorial prose,

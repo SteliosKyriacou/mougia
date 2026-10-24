@@ -33,8 +33,8 @@ from mougia_train.poets import POETS, run_label  # noqa: E402
 from mougia_train.runlog import RunLogger  # noqa: E402
 from mougia_train.tokenizer import BOS, EOS, PAD, SEP, UNK, Tokenizer  # noqa: E402
 
-DATA = os.path.join(ROOT, "data", "processed", "train")
-GRAPHS = os.path.join(ROOT, "data", "connectomes", "processed")
+DATA = os.path.join(ROOT, "data", "old", "processed", "train")
+GRAPHS = os.path.join(ROOT, "data", "old", "connectomes", "processed")
 
 
 def parse():
@@ -44,7 +44,7 @@ def parse():
     ap.add_argument("--wiring", choices=["connectome", "random"], default="connectome")
     ap.add_argument("--max-edges", type=int, default=0, help="keep only the strongest N connections (density matching)")
     ap.add_argument("--run-id", default=None)
-    ap.add_argument("--data", default=None, help="training-data folder from prepare.py (default data/processed/train)")
+    ap.add_argument("--data", default=None, help="training-data folder from prepare.py (default data/old/processed/train)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ticks", type=int, default=3)
     ap.add_argument("--alpha", type=float, default=0.5)
