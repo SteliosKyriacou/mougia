@@ -73,7 +73,9 @@ def parse():
     ap.add_argument("--warmup", type=int, default=100)
     ap.add_argument("--clip", type=float, default=1.0)
     ap.add_argument("--epochs", type=int, default=60, help="maximum epochs (cosine schedule over this many)")
-    ap.add_argument("--patience", type=int, default=8, help="stop after this many epochs without a better val_loss")
+    ap.add_argument("--patience", type=int, default=8, help="stop after this many epochs without a better val_loss (0 = never)")
+    ap.add_argument("--init", default=None, help="continue from this fly_books checkpoint (weights, tokenizer, epoch and "
+                                                 "step count; the optimizer restarts with a fresh warmup)")
     ap.add_argument("--max-hours", type=float, default=0)
     ap.add_argument("--prompt", default=PROMPT, help="couplet answered after every epoch")
     ap.add_argument("--show", type=int, default=3, help="replies to print per epoch (best of 16)")
@@ -146,7 +148,11 @@ def main():
     poems = [json.loads(l) for l in open(a.corpus, encoding="utf-8")]
     is_val = lambda p: int(hashlib.md5(p["poem_id"].encode()).hexdigest(), 16) % 1000 < a.val_frac * 1000
     train_p, val_p = [p for p in poems if not is_val(p)], [p for p in poems if is_val(p)]
-    tok = Tokenizer.build(["\n".join(p["lines"]) for p in train_p], min_count=1, max_size=12000)
+    init = torch.load(a.init, map_location="cpu", weights_only=False) if a.init else None
+    if init:  # the tokenizer the checkpoint was trained with
+        tok = Tokenizer.load(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(a.init))), "data", "tokenizer.json"))
+    else:
+        tok = Tokenizer.build(["\n".join(p["lines"]) for p in train_p], min_count=1, max_size=12000)
     train_x, val_x = examples(train_p, tok), examples(val_p, tok)
     val_pairs, val_shuffled = reply_pairs(val_p, tok)  # true call / a call from another poem → how much the call is used
     prompt = "\n".join(normalize(l) for l in a.prompt.split("\n"))
@@ -157,9 +163,11 @@ def main():
                        readout_hidden=a.readout_hidden, learn_tau=not a.no_learn_tau, dropout=a.dropout,
                        interface="neuron", sep_id=SEP, mb=mb, mb_decay=a.mb_decay,
                        mb_eta=a.mb_eta, surprise=a.surprise).to(dev)
+    if init:
+        model.load_state_dict(init["model"])
     masks = verse_masks(tok)
 
-    label = f"{POETS[a.sex]['name']} · books" + (" · random wiring" if a.wiring == "random" else "") + (" · mushroom-body memory" if a.mb else "") + (f" η₀={a.mb_eta:g}" if a.mb and a.mb_eta != 1 else "") + (" + surprise" if a.surprise else "")
+    label = f"{POETS[a.sex]['name']} · books" + (" · random wiring" if a.wiring == "random" else "") + (" · mushroom-body memory" if a.mb else "") + (f" η₀={a.mb_eta:g}" if a.mb and a.mb_eta != 1 else "") + (" + surprise" if a.surprise else "") + (" · continued" if a.init else "")
     params = model.n_params()
     log = RunLogger(a.run_id, {
         "label": label, "poet": POETS[a.sex]["name"], "sex": a.sex, "connectome": POETS[a.sex]["connectome"], "args": vars(a),
@@ -241,20 +249,23 @@ def main():
                    os.path.join(log.dir, "checkpoints", f"{tag}.pt"))
 
     step, epoch, best_loss, bad = 0, 0, float("inf"), 0
+    if init:
+        step, epoch = init["step"], init["epoch"]
+    step0, epoch0 = step, epoch
     state, note = "finished", None
     model.train()
     try:
         with log.sampling():
             res = evaluate()
-            log.eval(step, "epoch 0", epoch=0, **res)
-            answer(0, res)
-        for epoch in range(1, a.epochs + 1):
+            log.eval(step, f"epoch {epoch0}", epoch=epoch0, **res)
+            answer(epoch0, res)
+        for epoch in range(epoch0 + 1, a.epochs + 1):
             order = list(range(len(train_x)))
             random.shuffle(order)
             t_last, tok_last = time.time(), 0
             for i in range(0, len(order), a.batch):
                 inp, tgt, mask = batch([train_x[j] for j in order[i:i + a.batch]])
-                scale = min(1.0, (step + 1) / a.warmup) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, step / total))))
+                scale = min(1.0, (step - step0 + 1) / a.warmup) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, step / total))))
                 for g, lr in zip(opt.param_groups, base_lrs):
                     g["lr"] = lr * scale
                 logits, _ = model(inp.to(dev))
@@ -289,7 +300,7 @@ def main():
                 else:
                     bad += 1
                 answer(epoch, res)
-            if bad >= a.patience:
+            if a.patience and bad >= a.patience:
                 note = f"early stop: {bad} epochs without a better val_loss (best {best_loss:.3f})"
                 break
             if a.max_hours and log.elapsed() > a.max_hours * 3600:
