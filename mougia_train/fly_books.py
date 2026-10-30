@@ -101,6 +101,23 @@ def examples(poems, tok):
     return out
 
 
+def reply_pairs(poems, tok):
+    """Held-out call→reply pairs, and the same replies after a call from ANOTHER poem (for context_gain).
+    The wrong call must come from a different poem: the next pair of the same poem has the reply itself as its call
+    (until 2026-10-30 a plain rotation did exactly that, so context_gain compared the true call with hearing the
+    answer and came out negative)."""
+    pairs = [(e, i) for i, p in enumerate(poems) for e in examples([p], tok) if e[1] > 0]
+    n, true, wrong = len(pairs), [], []
+    for i, ((ids, k), poem) in enumerate(pairs):
+        j = (i + n // 2) % n
+        while pairs[j][1] == poem:
+            j = (j + 1) % n
+        (cids, ck), _ = pairs[j]
+        true.append((ids, k))
+        wrong.append((cids[:ck] + ids[k:], ck))
+    return true, wrong
+
+
 def batch(exs, reply_only=False):
     L = max(len(s) for s, _ in exs) - 1
     inp = torch.full((len(exs), L), PAD, dtype=torch.long)
@@ -131,10 +148,7 @@ def main():
     train_p, val_p = [p for p in poems if not is_val(p)], [p for p in poems if is_val(p)]
     tok = Tokenizer.build(["\n".join(p["lines"]) for p in train_p], min_count=1, max_size=12000)
     train_x, val_x = examples(train_p, tok), examples(val_p, tok)
-    val_pairs = [e for e in val_x if e[1] > 0]
-    # the same replies after a call from another held-out pair (fixed derangement) → how much the call is used
-    rot = val_pairs[1:] + val_pairs[:1]
-    val_shuffled = [(c[:k] + r[k_r:], k) for (c, k), (r, k_r) in zip(rot, val_pairs)]
+    val_pairs, val_shuffled = reply_pairs(val_p, tok)  # true call / a call from another poem → how much the call is used
     prompt = "\n".join(normalize(l) for l in a.prompt.split("\n"))
 
     graph = load_graph(os.path.join(GRAPHS, f"{a.sex}_{a.region}.pt"), wiring=a.wiring, seed=a.seed)
