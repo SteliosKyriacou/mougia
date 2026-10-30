@@ -93,6 +93,34 @@ def load_graph(path, wiring="connectome", max_edges=None, seed=0):
     return g
 
 
+# ---- What keeps context in this model, and what does not ---------------------------------------------------------
+# A human poet answering a τσιαττιστό relies on several memory systems at once (see the discussion in the project
+# notes); this is how each one maps onto the fly model, and which of them exist here:
+#
+#  1. Persistent activity — the recurrent state h of all ~139k neurons, carried from one syllable to the next. In the
+#     brain: reverberating loops in prefrontal/parietal cortex. Present since v1. Weakness: a chaotic recurrent state
+#     smears what it holds, so the rival's rhyme fades within a few syllables.
+#  2. Slow neurons — learn_tau: every neuron learns its own integration rate, so some can integrate over many
+#     syllables (the brain's hierarchy of timescales: slow areas hold the topic, fast ones the syllable).
+#  3. Ears and echo — interface="neuron": the call arrives through the auditory (Johnston's organ) neurons, and while
+#     the fly answers those neurons keep receiving the mean of the call. A crude stand-in for the phonological loop
+#     (the ~2 s sound buffer a human keeps rehearsing); it is an average, so it cannot single out the rhyme word.
+#  4. Mushroom-body memory — mb (v5): fast plastic Kenyon-cell→MBON synapses, written within the poem and read back
+#     while answering. In the brain: synapses that stay changed for seconds (fast weights, "activity-silent" working
+#     memory) and the hippocampus' store-once / recall-from-a-cue memory, which is mathematically close to attention.
+#     Here it is built only from the fly's own circuit: the KC code is the key, dopamine decides what is written,
+#     MBONs read it out, and the result reaches the descending neurons through the real wiring (2–3 hops).
+#  5. Dopamine gating — the write signal of (4) is the activity of the real DANs (PAM / PPL1) that innervate each
+#     MBON. In the fly, DANs report reward and punishment; in mammals, dopamine also reports prediction error.
+#
+# NOT implemented (yet):
+#  - Surprise: no prediction-error signal exists in the model. The DANs are driven only by the brain's ordinary
+#    activity, not by how unexpected a syllable was; feeding −log p(syllable) into the DANs would make memory
+#    writes surprise-driven ("remember what you didn't see coming"), as in predictive-processing accounts.
+#  - Planning ahead (choosing the rhyme word first) and a separate topic/goal state: the fly writes syllable by
+#    syllable, and any plan must live implicitly in h.
+#  - Gated working memory (basal-ganglia style "store this, ignore that"): the forgetting rate λ and write strength η
+#    are learned per MBON but fixed during a poem.
 class FlyBrainLM(nn.Module):
     def __init__(self, graph, vocab_size, d_model=256, ticks=3, alpha=0.5, learn_edges=True, readout_hidden=512,
                  learn_tau=False, ctx_drive=False, dropout=0.0, interface="type", sep_id=5, mb=None, mb_decay=0.95):
@@ -132,6 +160,7 @@ class FlyBrainLM(nn.Module):
         self.bias = nn.Parameter(torch.zeros(n, 1))
 
         self.mb = mb is not None
+        self.mb_off = False  # set True to run without the plastic memory (ablation: how much does it help?)
         if self.mb:
             mbons, m_of_edge = torch.unique(mb["mbon"], return_inverse=True)
             in_kc = torch.zeros(len(mbons)).index_add_(0, m_of_edge, mb["syn"])
@@ -201,7 +230,7 @@ class FlyBrainLM(nn.Module):
         return torch.zeros(self.n, batch, device=self.crow.device)
 
     def init_memory(self, batch):
-        return torch.zeros(len(self.mb_kc), batch, device=self.crow.device) if self.mb else None
+        return torch.zeros(len(self.mb_kc), batch, device=self.crow.device) if self.mb and not self.mb_off else None
 
     # ---- one syllable ---------------------------------------------------------------------------
     def rates(self):
