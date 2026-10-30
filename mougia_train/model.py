@@ -10,6 +10,14 @@ Dynamics (rate model, Euler step α, `ticks` steps per syllable):
   h ← (1-α)·h + α·(ρ·W·tanh(h) + b + I_in)
 Syllables enter as currents into the olfactory receptor neurons (one learned channel per ORN type, shared across
 sexes) and are read out from the descending neurons, pooled per DN type (also shared), through a small MLP.
+
+Mushroom-body memory (mb, v5): the Kenyon-cell → MBON synapses get a fast plastic component A, one value per real
+KC→MBON pair and per sequence, starting at zero. After each syllable the dopamine reaching each MBON through the real
+DAN→MBON wiring gates a write:
+  A_e ← λ_m · A_e + η_m · c_e · d_m · r_kc        (e = KC→MBON edge, m = its MBON, r = KC rate, d = dopamine)
+and during the ticks every MBON receives Σ_e A_e · r_kc on top of its fixed input. Only λ_m (forgetting) and η_m
+(write strength and sign) are learned, per MBON; what gets stored is decided by the brain's own activity, so the
+fly can keep the rival's call in its synapses instead of only in its firing.
 """
 import math
 
@@ -57,6 +65,18 @@ class _Structure:
         return getattr(self.m, k)
 
 
+def load_mb(path, region, n, wiring="connectome", seed=0):
+    """Mushroom-body circuit from scripts/build_mushroom_body.py. wiring='random' sends every plastic and dopamine
+    edge to a random set of n_MBON neurons instead (sources and weights kept), like load_graph's rewiring."""
+    mb = dict(torch.load(path)[region])
+    if wiring == "random":
+        gen = torch.Generator().manual_seed(seed + 1)
+        targets = torch.randperm(n, generator=gen)[:len(torch.unique(mb["mbon"]))]
+        mb["mbon"] = targets[torch.randint(0, len(targets), (len(mb["mbon"]),), generator=gen)]
+        mb["dan_mbon"] = targets[torch.randint(0, len(targets), (len(mb["dan_mbon"]),), generator=gen)]
+    return mb
+
+
 def load_graph(path, wiring="connectome", max_edges=None, seed=0):
     """Load a processed connectome. wiring='random' keeps each edge's source, weight and sign but rewires its target."""
     g = torch.load(path)
@@ -75,14 +95,15 @@ def load_graph(path, wiring="connectome", max_edges=None, seed=0):
 
 class FlyBrainLM(nn.Module):
     def __init__(self, graph, vocab_size, d_model=256, ticks=3, alpha=0.5, learn_edges=True, readout_hidden=512,
-                 learn_tau=False, ctx_drive=False, dropout=0.0, interface="type", sep_id=5):
+                 learn_tau=False, ctx_drive=False, dropout=0.0, interface="type", sep_id=5, mb=None, mb_decay=0.95):
         """learn_tau: every neuron learns its own integration rate α_i ∈ (0.05, 1) — slow neurons can hold memory.
         ctx_drive: the input neurons also receive a running summary (mean embedding) of everything heard so far in
         the sequence, like a lingering smell, so the call stays present while the reply is produced.
         interface="neuron" (v4): every olfactory receptor neuron and every descending neuron is its own channel
         (fair per-type counts, identical in both sexes), and the fly gets EARS: tokens before <sep> (the rival's
         call) arrive through Johnston's-organ auditory neurons, its own words through the olfactory neurons, and
-        while it answers the auditory neurons keep receiving an echo (mean) of the call."""
+        while it answers the auditory neurons keep receiving an echo (mean) of the call.
+        mb: mushroom-body circuit (load_mb) → plastic KC→MBON memory, see the module docstring; mb_decay = initial λ."""
         super().__init__()
         n = graph["n"]
         self.n, self.ticks, self.alpha = n, ticks, alpha
@@ -109,6 +130,26 @@ class FlyBrainLM(nn.Module):
         self.rho = nn.Parameter(torch.tensor(1.0))
         self.alpha_logit = nn.Parameter(torch.full((n, 1), math.log((alpha - 0.05) / (1 - alpha)))) if learn_tau else None
         self.bias = nn.Parameter(torch.zeros(n, 1))
+
+        self.mb = mb is not None
+        if self.mb:
+            mbons, m_of_edge = torch.unique(mb["mbon"], return_inverse=True)
+            in_kc = torch.zeros(len(mbons)).index_add_(0, m_of_edge, mb["syn"])
+            self.register_buffer("mb_kc", mb["kc"])
+            self.register_buffer("mb_mbon", mb["mbon"])
+            self.register_buffer("mb_m", m_of_edge)
+            self.register_buffer("mb_c", mb["syn"] / in_kc[m_of_edge])  # each MBON's plastic input sums to 1
+            pos = torch.full((n,), -1, dtype=torch.int64)
+            pos[mbons] = torch.arange(len(mbons))
+            keep = pos[mb["dan_mbon"]] >= 0
+            dan, dan_m, dan_syn = mb["dan"][keep], pos[mb["dan_mbon"][keep]], mb["dan_syn"][keep]
+            in_dan = torch.zeros(len(mbons)).index_add_(0, dan_m, dan_syn).clamp_min(1.0)
+            self.register_buffer("mb_dan", dan)
+            self.register_buffer("mb_dan_m", dan_m)
+            self.register_buffer("mb_dan_c", dan_syn / in_dan[dan_m])
+            self.n_mbon = len(mbons)
+            self.mb_decay_logit = nn.Parameter(torch.full((self.n_mbon, 1), math.log(mb_decay / (1 - mb_decay))))
+            self.mb_eta = nn.Parameter(torch.ones(self.n_mbon, 1))
 
         self.interface, self.sep_id = interface, sep_id
         if interface == "neuron":
@@ -159,14 +200,18 @@ class FlyBrainLM(nn.Module):
     def init_state(self, batch):
         return torch.zeros(self.n, batch, device=self.crow.device)
 
+    def init_memory(self, batch):
+        return torch.zeros(len(self.mb_kc), batch, device=self.crow.device) if self.mb else None
+
     # ---- one syllable ---------------------------------------------------------------------------
     def rates(self):
         return 0.05 + 0.95 * torch.sigmoid(self.alpha_logit) if self.alpha_logit is not None else self.alpha
 
-    def _step(self, h, x, w, ctx=None, heard=None, echo=None):
+    def _step(self, h, x, w, ctx=None, heard=None, echo=None, mem=None):
         """h: (N, B) state; x: (B, d) syllable embedding; w: connection strengths.
         neuron interface: heard (B,) 1 = this syllable is the rival's (→ hearing), 0 = own (→ smell);
-        echo (B, d) = mean embedding of the call heard so far. Returns new state and the readout features."""
+        echo (B, d) = mean embedding of the call heard so far; mem (E_mb, B) = plastic KC→MBON strengths (mb only).
+        Returns new state, the readout features and the new memory."""
         S = _Structure(self)
         a = self.rates()
         if self.interface == "neuron":
@@ -183,18 +228,27 @@ class FlyBrainLM(nn.Module):
             inp = torch.zeros_like(h).index_add(0, self.in_idx, drive[self.in_type])
         inp = inp + self.bias
         for _ in range(self.ticks):
-            rec = _ConnectomeMM.apply(w, torch.tanh(h), S)
+            r = torch.tanh(h)
+            rec = _ConnectomeMM.apply(w, r, S)
+            if mem is not None:
+                rec = rec.index_add(0, self.mb_mbon, mem * r[self.mb_kc])
             h = (1 - a) * h + a * (self.rho * rec + inp)
+        if mem is not None:
+            r = torch.tanh(h)
+            dopamine = torch.zeros(self.n_mbon, h.shape[1], device=h.device).index_add(0, self.mb_dan_m, self.mb_dan_c[:, None] * r[self.mb_dan])
+            write = (self.mb_eta * dopamine)[self.mb_m] * self.mb_c[:, None] * r[self.mb_kc]
+            mem = torch.sigmoid(self.mb_decay_logit)[self.mb_m] * mem + write
         act = torch.tanh(h[self.out_idx])  # (n_dn, B)
         if self.interface == "neuron":
-            return h, act.T
+            return h, act.T, mem
         pooled = torch.zeros(self.n_out, h.shape[1], device=h.device).index_add(0, self.out_type, act) / self.out_count[:, None]
-        return h, pooled.T
+        return h, pooled.T, mem
 
     def forward(self, tokens, h=None, grad_ckpt=True):
         """tokens: (B, L) → logits (B, L, V), final state."""
         B, L = tokens.shape
         h = self.init_state(B) if h is None else h
+        mem = self.init_memory(B)
         W = self.weights()
         x = self.embed(tokens)
         ctx = torch.cumsum(x, 1) / torch.arange(1, L + 1, device=x.device)[None, :, None] if self.ctx_to_orn is not None else None
@@ -211,9 +265,9 @@ class FlyBrainLM(nn.Module):
             hd = heard[:, t] if heard is not None else None
             ec = echo[:, t] if echo is not None else None
             if grad_ckpt and self.training:
-                h, o = checkpoint(self._step, h, x[:, t], W, c, hd, ec, use_reentrant=False)
+                h, o, mem = checkpoint(self._step, h, x[:, t], W, c, hd, ec, mem, use_reentrant=False)
             else:
-                h, o = self._step(h, x[:, t], W, c, hd, ec)
+                h, o, mem = self._step(h, x[:, t], W, c, hd, ec, mem)
             outs.append(o)
         return self.readout(torch.stack(outs, 1)), h
 
@@ -231,6 +285,7 @@ class FlyBrainLM(nn.Module):
         dev = self.crow.device
         w = self.weights()
         h = self.init_state(1)
+        mem = self.init_memory(1)
         o = None
         csum, cnt = 0, 0
         hsum, hcnt = torch.zeros(1, self.embed.embedding_dim, device=dev), 0
@@ -243,8 +298,9 @@ class FlyBrainLM(nn.Module):
             hd = torch.tensor([1.0 if listening else 0.0], device=dev)
             if listening:
                 hsum, hcnt = hsum + e, hcnt + 1
-            h, o = self._step(h, e, w, csum / cnt, hd, hsum / max(hcnt, 1))
+            h, o, mem = self._step(h, e, w, csum / cnt, hd, hsum / max(hcnt, 1), mem)
         h, o = h.repeat(1, n), o.repeat(n, 1)
+        mem = mem.repeat(1, n) if mem is not None else None
         csum = csum.repeat(n, 1)
         echo = (hsum / max(hcnt, 1)).repeat(n, 1)
         own = torch.zeros(n, device=dev)
@@ -297,7 +353,7 @@ class FlyBrainLM(nn.Module):
                 break
             e = self.embed(nxt)
             csum, cnt = csum + e, cnt + 1
-            h, o = self._step(h, e, w, csum / cnt, own, echo)
+            h, o, mem = self._step(h, e, w, csum / cnt, own, echo, mem)
         return seqs, (logp / count.clamp_min(1)).tolist()
 
     @torch.no_grad()

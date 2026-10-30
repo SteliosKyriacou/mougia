@@ -16,7 +16,7 @@ import torch
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, ROOT)
-from mougia_train.model import FlyBrainLM, load_graph  # noqa: E402
+from mougia_train.model import FlyBrainLM, load_graph, load_mb  # noqa: E402
 from mougia_train.generate import reply as gen_reply  # noqa: E402
 from mougia_train.tokenizer import Tokenizer  # noqa: E402
 from mougia_train.train import DATA, GRAPHS  # noqa: E402
@@ -30,10 +30,11 @@ def load_model(ckpt_path, device="cuda"):
         data_dir = data_dir.replace("data/processed", "data/old/processed")
     tok = Tokenizer.load(os.path.join(data_dir, "tokenizer.json"))
     graph = load_graph(os.path.join(GRAPHS, f"{a['sex']}_{a['region']}.pt"), wiring=a["wiring"], max_edges=a.get("max_edges") or None, seed=a["seed"])
+    mb = load_mb(os.path.join(GRAPHS, f"{a['sex']}_mb.pt"), a["region"], graph["n"], wiring=a["wiring"], seed=a["seed"]) if a.get("mb") else None
     model = FlyBrainLM(graph, len(tok), d_model=a["d_model"], ticks=a["ticks"], alpha=a["alpha"],
                        learn_edges=not a["no_learn_edges"], readout_hidden=a["readout_hidden"],
                        learn_tau=not a.get("no_learn_tau", True), ctx_drive=not a.get("no_ctx_drive", True),
-                       dropout=a.get("dropout", 0.0), interface=a.get("interface", "type"))
+                       dropout=a.get("dropout", 0.0), interface=a.get("interface", "type"), mb=mb, mb_decay=a.get("mb_decay", 0.95))
     model.load_state_dict(ck["model"])
     return model.to(device).eval(), tok, ck
 

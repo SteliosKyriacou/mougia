@@ -28,7 +28,7 @@ ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 from mougia_train.generate import BAN, prompt_ids, reply as gen_reply, score_reply, verse_masks  # noqa: E402
-from mougia_train.model import FlyBrainLM, load_graph  # noqa: E402
+from mougia_train.model import FlyBrainLM, load_graph, load_mb  # noqa: E402
 from mougia_train.poets import POETS, run_label  # noqa: E402
 from mougia_train.runlog import RunLogger  # noqa: E402
 from mougia_train.tokenizer import BOS, EOS, PAD, SEP, UNK, Tokenizer  # noqa: E402
@@ -78,6 +78,8 @@ def parse():
     ap.add_argument("--ckpt-every-min", type=float, default=30)
     ap.add_argument("--eval-replies", type=int, default=24)
     ap.add_argument("--max-hours", type=float, default=0, help="stop after this much training time (0 = no limit)")
+    ap.add_argument("--mb", action="store_true", help="mushroom-body memory: plastic KC→MBON synapses gated by dopamine (v5)")
+    ap.add_argument("--mb-decay", type=float, default=0.95, help="initial per-syllable retention λ of the mushroom-body memory")
     return ap.parse_args()
 
 
@@ -163,16 +165,17 @@ def main():
     dev = "cuda"
     tok = Tokenizer.load(os.path.join(DATA, "tokenizer.json"))
     graph = load_graph(os.path.join(GRAPHS, f"{a.sex}_{a.region}.pt"), wiring=a.wiring, max_edges=a.max_edges or None, seed=a.seed)
+    mb = load_mb(os.path.join(GRAPHS, f"{a.sex}_mb.pt"), a.region, graph["n"], wiring=a.wiring, seed=a.seed) if a.mb else None
     model = FlyBrainLM(graph, len(tok), d_model=a.d_model, ticks=a.ticks, alpha=a.alpha,
                        learn_edges=not a.no_learn_edges, readout_hidden=a.readout_hidden, learn_tau=not a.no_learn_tau,
                        ctx_drive=not a.no_ctx_drive and a.interface == "type", dropout=a.dropout,
-                       interface=a.interface, sep_id=SEP).to(dev)
+                       interface=a.interface, sep_id=SEP, mb=mb, mb_decay=a.mb_decay).to(dev)
     data = Batches(a, tok)
     masks = verse_masks(tok)
     prompts = json.load(open(os.path.join(DATA, "sample_prompts.json"), encoding="utf-8"))
     data_stats = json.load(open(os.path.join(DATA, "stats.json")))
 
-    label = run_label(a.sex, a.wiring) + ("" if a.region == "full" else f" · {a.region} brain") + (f" · top {a.max_edges:,} edges" if a.max_edges else "")
+    label = run_label(a.sex, a.wiring) + ("" if a.region == "full" else f" · {a.region} brain") + (f" · top {a.max_edges:,} edges" if a.max_edges else "") + (" · mushroom-body memory" if a.mb else "")
     run_id = a.run_id or f"{POETS[a.sex]['name'].lower()}-{a.region}-{a.wiring}-{time.strftime('%Y%m%d-%H%M')}"
     params = model.n_params()
     log = RunLogger(run_id, {
@@ -180,15 +183,19 @@ def main():
         "graph": {"neurons": graph["n"], "edges": int(len(graph["pre"])), "synapses": int(graph["syn"].sum()),
                   "interface": a.interface, "input_neurons": int(len(model.in_idx)),
                   "audio_neurons": int(len(model.au_idx)) if a.interface == "neuron" else 0, "output_channels": model.n_out,
-                  "output_neurons": int(len(model.out_idx)), "min_syn": graph.get("min_syn"), "wiring": a.wiring},
+                  "output_neurons": int(len(model.out_idx)), "min_syn": graph.get("min_syn"), "wiring": a.wiring,
+                  "mb_plastic_edges": int(len(model.mb_kc)) if a.mb else 0, "mb_mbons": model.n_mbon if a.mb else 0,
+                  "mb_dan_edges": int(len(model.mb_dan)) if a.mb else 0},
         "params": {"total": sum(params.values()), "edges": params.get("edge_logscale", 0), "by_tensor": params},
         "data": data_stats, "data_dir": DATA, "vocab": len(tok), "sample_prompts": [p["id"] for p in prompts],
     }, sample_every_s=a.sample_every_min * 60)
 
     edge_params = [model.edge_logscale] if model.edge_logscale is not None else []
-    other = [p for n, p in model.named_parameters() if n != "edge_logscale"]
+    mb_params = [p for n, p in model.named_parameters() if n.startswith("mb_")]  # no decay: it would pull λ to 0.5, η to 0
+    other = [p for n, p in model.named_parameters() if n != "edge_logscale" and not n.startswith("mb_")]
     opt = torch.optim.AdamW([{"params": other, "lr": a.lr, "weight_decay": a.weight_decay},
-                             {"params": edge_params, "lr": a.edge_lr, "weight_decay": 0.0}])
+                             {"params": edge_params, "lr": a.edge_lr, "weight_decay": 0.0},
+                             {"params": mb_params, "lr": a.lr, "weight_decay": 0.0}])
     base_lrs = [g["lr"] for g in opt.param_groups]
 
     phases = [("pretrain", a.pretrain_tokens, data.lm), ("couplets", a.couplet_tokens, data.couplets), ("pairs", a.pair_tokens, data.pairs)]
@@ -303,7 +310,10 @@ def main():
                                 tokens_per_s=tok_last / max(dt, 1e-6), gpu_mem_gb=torch.cuda.max_memory_allocated() / 1e9,
                                 phase_progress=seen / budget, rho=model.rho.item(), in_gain=model.in_gain.item(),
                                 edge_scale_mean=float(ls.mean()) if ls is not None else None,
-                                edge_scale_std=float(ls.std()) if ls is not None else None)
+                                edge_scale_std=float(ls.std()) if ls is not None else None,
+                                mb_decay_mean=float(torch.sigmoid(model.mb_decay_logit).mean()) if model.mb else None,
+                                mb_eta_mean=float(model.mb_eta.mean()) if model.mb else None,
+                                mb_eta_abs=float(model.mb_eta.abs().mean()) if model.mb else None)
                     t_last, tok_last = time.time(), 0
                 if log.elapsed() - last_eval >= a.eval_every_min * 60:
                     with log.sampling():

@@ -22,3 +22,10 @@ run v4-markos-full-matched    --sex male   --region full --max-edges $FEMALE_EDG
 run v4-kyriakou-full-random   --sex female --region full --wiring random
 run v4-markos-full            --sex male   --region full
 run v4-markos-full-random     --sex male   --region full --wiring random --max-edges $FEMALE_EDGES
+
+# v5: v4 + MUSHROOM-BODY MEMORY — the 46–51k Kenyon-cell→MBON synapses become fast plastic weights, rewritten every
+# syllable by dopamine through the real DAN→MBON wiring (scripts/build_mushroom_body.py, FlyBrainLM mb=True).
+# Same data and settings as v4, so v4 vs v5 isolates the memory; the random control rewires the memory circuit too.
+run v5-kyriakou-full-mb       --sex female --region full --mb
+run v5-kyriakou-full-random-mb --sex female --region full --wiring random --mb
+run v5-markos-full-mb         --sex male   --region full --mb
