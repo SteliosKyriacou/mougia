@@ -53,6 +53,8 @@ def parse():
     ap.add_argument("--wiring", choices=["connectome", "random"], default="connectome")
     ap.add_argument("--mb", action="store_true", help="mushroom-body memory (see model.py)")
     ap.add_argument("--mb-decay", type=float, default=0.95)
+    ap.add_argument("--mb-eta", type=float, default=1.0, help="initial write strength η of the memory (50 = strong from the start)")
+    ap.add_argument("--surprise", action="store_true", help="drive the DANs with the fly's own surprise at each syllable (needs --mb)")
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--corpus", default=CORPUS)
     ap.add_argument("--val-frac", type=float, default=0.10)
@@ -139,10 +141,11 @@ def main():
     mb = load_mb(os.path.join(GRAPHS, f"{a.sex}_mb.pt"), a.region, graph["n"], wiring=a.wiring, seed=a.seed) if a.mb else None
     model = FlyBrainLM(graph, len(tok), d_model=a.d_model, ticks=a.ticks, alpha=a.alpha, learn_edges=not a.no_learn_edges,
                        readout_hidden=a.readout_hidden, learn_tau=not a.no_learn_tau, dropout=a.dropout,
-                       interface="neuron", sep_id=SEP, mb=mb, mb_decay=a.mb_decay).to(dev)
+                       interface="neuron", sep_id=SEP, mb=mb, mb_decay=a.mb_decay,
+                       mb_eta=a.mb_eta, surprise=a.surprise).to(dev)
     masks = verse_masks(tok)
 
-    label = f"{POETS[a.sex]['name']} · books" + (" · random wiring" if a.wiring == "random" else "") + (" · mushroom-body memory" if a.mb else "")
+    label = f"{POETS[a.sex]['name']} · books" + (" · random wiring" if a.wiring == "random" else "") + (" · mushroom-body memory" if a.mb else "") + (f" η₀={a.mb_eta:g}" if a.mb and a.mb_eta != 1 else "") + (" + surprise" if a.surprise else "")
     params = model.n_params()
     log = RunLogger(a.run_id, {
         "label": label, "poet": POETS[a.sex]["name"], "sex": a.sex, "connectome": POETS[a.sex]["connectome"], "args": vars(a),
@@ -195,6 +198,8 @@ def main():
                 out["memory_gain"] = out["val_loss_reply_no_memory"] - out["val_loss_reply"]
                 out["mb_decay_mean"] = float(torch.sigmoid(model.mb_decay_logit).mean())
                 out["mb_eta_mean"] = float(model.mb_eta.mean())
+            if a.surprise:
+                out["dan_surprise_gain_mean"] = float(model.dan_surprise_gain.mean())
         out["val_ppl"] = math.exp(min(out["val_loss"], 20))
         model.train()
         return out
@@ -208,7 +213,8 @@ def main():
             log.sample(step, f"epoch {epoch}", prompt=prompt, reply=c["reply"], mode="verse (best of 16)", logp=c["logp"], **c["scores"])
         head = (f"=== EPOCH {epoch} · step {step} · {log.elapsed() / 60:.0f} min · val_loss {res['val_loss']:.3f} "
                 f"(ppl {res['val_ppl']:.0f}) · reply loss {res['val_loss_reply']:.3f} · context gain {res['context_gain']:+.3f}"
-                + (f" · memory gain {res['memory_gain']:+.3f} · λ {res['mb_decay_mean']:.3f} η {res['mb_eta_mean']:+.2f}" if a.mb else ""))
+                + (f" · memory gain {res['memory_gain']:+.3f} · λ {res['mb_decay_mean']:.3f} η {res['mb_eta_mean']:+.2f}" if a.mb else "")
+                + (f" · surprise gain {res['dan_surprise_gain_mean']:+.2f}" if a.surprise else ""))
         body = "\n".join(f"[{i + 1}] " + c["reply"].replace("\n", " / ")
                          + f"   (meter {'✓' if c['scores']['meter_ok'] else '✗'}, rhyme {'✓' if c['scores']['rhyme_ok'] else '✗'})"
                          for i, c in enumerate(best))

@@ -113,17 +113,20 @@ def load_graph(path, wiring="connectome", max_edges=None, seed=0):
 #  5. Dopamine gating — the write signal of (4) is the activity of the real DANs (PAM / PPL1) that innervate each
 #     MBON. In the fly, DANs report reward and punishment; in mammals, dopamine also reports prediction error.
 #
+#  6. Surprise — surprise=True: every syllable the fly hears or says also drives the DANs with its own surprise,
+#     −log p(syllable) under the prediction it had just made. Unexpected syllables (the rival's twist, a rare rhyme
+#     word) then release more dopamine and are written into the memory more strongly — "remember what you didn't
+#     see coming", as in predictive-processing accounts where the brain mostly passes on its prediction errors.
+#
 # NOT implemented (yet):
-#  - Surprise: no prediction-error signal exists in the model. The DANs are driven only by the brain's ordinary
-#    activity, not by how unexpected a syllable was; feeding −log p(syllable) into the DANs would make memory
-#    writes surprise-driven ("remember what you didn't see coming"), as in predictive-processing accounts.
 #  - Planning ahead (choosing the rhyme word first) and a separate topic/goal state: the fly writes syllable by
 #    syllable, and any plan must live implicitly in h.
 #  - Gated working memory (basal-ganglia style "store this, ignore that"): the forgetting rate λ and write strength η
 #    are learned per MBON but fixed during a poem.
 class FlyBrainLM(nn.Module):
     def __init__(self, graph, vocab_size, d_model=256, ticks=3, alpha=0.5, learn_edges=True, readout_hidden=512,
-                 learn_tau=False, ctx_drive=False, dropout=0.0, interface="type", sep_id=5, mb=None, mb_decay=0.95):
+                 learn_tau=False, ctx_drive=False, dropout=0.0, interface="type", sep_id=5, mb=None, mb_decay=0.95,
+                 mb_eta=1.0, surprise=False):
         """learn_tau: every neuron learns its own integration rate α_i ∈ (0.05, 1) — slow neurons can hold memory.
         ctx_drive: the input neurons also receive a running summary (mean embedding) of everything heard so far in
         the sequence, like a lingering smell, so the call stays present while the reply is produced.
@@ -131,7 +134,11 @@ class FlyBrainLM(nn.Module):
         (fair per-type counts, identical in both sexes), and the fly gets EARS: tokens before <sep> (the rival's
         call) arrive through Johnston's-organ auditory neurons, its own words through the olfactory neurons, and
         while it answers the auditory neurons keep receiving an echo (mean) of the call.
-        mb: mushroom-body circuit (load_mb) → plastic KC→MBON memory, see the module docstring; mb_decay = initial λ."""
+        mb: mushroom-body circuit (load_mb) → plastic KC→MBON memory, see the module docstring; mb_decay = initial λ,
+        mb_eta = initial write strength η.
+        surprise: the DANs also receive the fly's own surprise at each syllable it hears or says, −log p(syllable)
+        under its previous prediction (÷ log V, so ~0 = expected … 1 = as unlikely as a random syllable), through a
+        learned gain per DAN — so unexpected syllables are written into the memory more strongly (needs mb)."""
         super().__init__()
         n = graph["n"]
         self.n, self.ticks, self.alpha = n, ticks, alpha
@@ -178,7 +185,11 @@ class FlyBrainLM(nn.Module):
             self.register_buffer("mb_dan_c", dan_syn / in_dan[dan_m])
             self.n_mbon = len(mbons)
             self.mb_decay_logit = nn.Parameter(torch.full((self.n_mbon, 1), math.log(mb_decay / (1 - mb_decay))))
-            self.mb_eta = nn.Parameter(torch.ones(self.n_mbon, 1))
+            self.mb_eta = nn.Parameter(torch.full((self.n_mbon, 1), float(mb_eta)))
+        self.surprise = surprise and self.mb
+        if self.surprise:
+            self.register_buffer("dan_idx", torch.unique(mb["dan"]))
+            self.dan_surprise_gain = nn.Parameter(torch.ones(len(self.dan_idx), 1))
 
         self.interface, self.sep_id = interface, sep_id
         if interface == "neuron":
@@ -236,10 +247,11 @@ class FlyBrainLM(nn.Module):
     def rates(self):
         return 0.05 + 0.95 * torch.sigmoid(self.alpha_logit) if self.alpha_logit is not None else self.alpha
 
-    def _step(self, h, x, w, ctx=None, heard=None, echo=None, mem=None):
+    def _step(self, h, x, w, ctx=None, heard=None, echo=None, mem=None, surprise=None):
         """h: (N, B) state; x: (B, d) syllable embedding; w: connection strengths.
         neuron interface: heard (B,) 1 = this syllable is the rival's (→ hearing), 0 = own (→ smell);
-        echo (B, d) = mean embedding of the call heard so far; mem (E_mb, B) = plastic KC→MBON strengths (mb only).
+        echo (B, d) = mean embedding of the call heard so far; mem (E_mb, B) = plastic KC→MBON strengths (mb only);
+        surprise (B,) = normalised surprise at this syllable, driven into the DANs (surprise only).
         Returns new state, the readout features and the new memory."""
         S = _Structure(self)
         a = self.rates()
@@ -256,6 +268,8 @@ class FlyBrainLM(nn.Module):
             drive = (d * self.in_gain).T  # (n_in, B)
             inp = torch.zeros_like(h).index_add(0, self.in_idx, drive[self.in_type])
         inp = inp + self.bias
+        if surprise is not None:
+            inp = inp.index_add(0, self.dan_idx, self.dan_surprise_gain * surprise[None, :])
         for _ in range(self.ticks):
             r = torch.tanh(h)
             rec = _ConnectomeMM.apply(w, r, S)
@@ -289,16 +303,29 @@ class FlyBrainLM(nn.Module):
             cnt = torch.cumsum(heard, 1).clamp_min(1)[..., None]
             echo = torch.cumsum(x * heard[..., None], 1) / cnt
         outs = []
+        logits = []  # surprise needs each prediction before the next syllable arrives
         for t in range(L):
             c = ctx[:, t] if ctx is not None else None
             hd = heard[:, t] if heard is not None else None
             ec = echo[:, t] if echo is not None else None
+            sp = self._surprise(logits[-1] if logits else None, tokens[:, t]) if self.surprise else None
             if grad_ckpt and self.training:
-                h, o, mem = checkpoint(self._step, h, x[:, t], W, c, hd, ec, mem, use_reentrant=False)
+                h, o, mem = checkpoint(self._step, h, x[:, t], W, c, hd, ec, mem, sp, use_reentrant=False)
             else:
-                h, o, mem = self._step(h, x[:, t], W, c, hd, ec, mem)
-            outs.append(o)
-        return self.readout(torch.stack(outs, 1)), h
+                h, o, mem = self._step(h, x[:, t], W, c, hd, ec, mem, sp)
+            if self.surprise:
+                logits.append(self.readout(o))
+            else:
+                outs.append(o)
+        return (torch.stack(logits, 1) if self.surprise else self.readout(torch.stack(outs, 1))), h
+
+    def _surprise(self, prev_logits, tok):
+        """−log p(tok) under the previous prediction, ÷ log V; 0 for the first syllable. A signal, not a path for
+        gradients: the readout is trained by the loss, not by what the DANs make of its surprise."""
+        if prev_logits is None:
+            return torch.zeros(tok.shape[0], device=tok.device)
+        lp = F.log_softmax(prev_logits.detach().float(), -1).gather(1, tok[:, None])[:, 0]
+        return -lp / math.log(prev_logits.shape[-1])
 
     def n_params(self):
         return {name: p.numel() for name, p in self.named_parameters()}
@@ -327,7 +354,8 @@ class FlyBrainLM(nn.Module):
             hd = torch.tensor([1.0 if listening else 0.0], device=dev)
             if listening:
                 hsum, hcnt = hsum + e, hcnt + 1
-            h, o, mem = self._step(h, e, w, csum / cnt, hd, hsum / max(hcnt, 1), mem)
+            sp = self._surprise(self.readout(o) if o is not None else None, torch.tensor([t], device=dev)) if self.surprise else None
+            h, o, mem = self._step(h, e, w, csum / cnt, hd, hsum / max(hcnt, 1), mem, sp)
         h, o = h.repeat(1, n), o.repeat(n, 1)
         mem = mem.repeat(1, n) if mem is not None else None
         csum = csum.repeat(n, 1)
@@ -346,7 +374,8 @@ class FlyBrainLM(nn.Module):
             is_ws = verse["word_start"].to(dev)
             lo, hi = verse.get("min_syl", 13), verse.get("max_syl", 16)
         for _ in range(max_new):
-            logits = self.readout(o) / max(temperature, 1e-5)
+            raw = self.readout(o)
+            logits = raw / max(temperature, 1e-5)
             if ban_ids:
                 logits[:, list(ban_ids)] = -1e9
             if verse:
@@ -382,7 +411,8 @@ class FlyBrainLM(nn.Module):
                 break
             e = self.embed(nxt)
             csum, cnt = csum + e, cnt + 1
-            h, o, mem = self._step(h, e, w, csum / cnt, own, echo, mem)
+            sp = self._surprise(raw, nxt) if self.surprise else None
+            h, o, mem = self._step(h, e, w, csum / cnt, own, echo, mem, sp)
         return seqs, (logp / count.clamp_min(1)).tolist()
 
     @torch.no_grad()
